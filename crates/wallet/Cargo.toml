@@ -1,0 +1,45 @@
+[package]
+name = "wallet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "CLI wallet exercising OID4VCI/OID4VP against the official EUDIW issuer/verifier reference services"
+
+[dependencies]
+openid4vp = { git = "https://github.com/spruceid/openid4vp" }
+# Holder-side OID4VCI: SpruceID also publishes an equivalent crate for the
+# issuance side, used here instead of hand-rolling the protocol.
+oid4vci = { git = "https://github.com/spruceid/oid4vci-rs" }
+
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+tokio = { version = "1", features = ["full"] }
+
+clap = { version = "4", features = ["derive"] }
+
+p256 = { version = "0.13", features = ["ecdsa", "jwk"] }
+# Pinned to 0.6 to match p256/elliptic_curve 0.13's expected RNG trait
+# version (the dep tree also carries rand_core 0.9/0.10 transitively for
+# unrelated crates).
+rand_core = { version = "0.6", features = ["getrandom"] }
+sha2 = "0.10"
+# URL-safe base64 for JWT/SD-JWT compact segments (SD-JWT itself isn't a
+# crate we depend on elsewhere, so this is needed to hand-roll it).
+base64 = "0.22"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+anyhow = "1"
+# openid4vp's own reqwest dependency doesn't disable reqwest's default
+# features, so native-tls (and its openssl-sys build) is pulled in
+# regardless of our own reqwest feature choice below. This box has no
+# pkg-config/libssl-dev and no root access, so force openssl-sys to build
+# OpenSSL from source instead of looking for a system install.
+openssl = { version = "0.10", features = ["vendored"] }
+# Cross-platform home dir resolution for ~/.eidas-testenv (resolves to
+# $HOME on Linux/macOS, matching the path the spec names).
+directories = "5"
+uuid = { version = "1", features = ["v4"] }
+time = { version = "0.3", features = ["formatting"] }

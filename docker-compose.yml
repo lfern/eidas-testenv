@@ -1,0 +1,23 @@
+services:
+  tsa:
+    build: ./docker/tsa
+    volumes:
+      - ./data/ca:/certs:ro
+    ports:
+      - "2560:2560"
+
+  ocsp:
+    build: ./docker/ocsp
+    volumes:
+      - ./data/ca:/certs:ro
+    ports:
+      - "2561:2561"
+
+  softhsm:
+    image: opendnssec/softhsm2
+    volumes:
+      - ./data/ca:/certs:ro
+      - softhsm-tokens:/var/lib/softhsm/tokens
+
+volumes:
+  softhsm-tokens:

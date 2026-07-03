@@ -1,0 +1,10 @@
+[package]
+name = "tl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "ETSI TS 119 612 Trusted List XML generator — not implemented yet"
+
+[dependencies]

@@ -1,0 +1,10 @@
+[package]
+name = "portal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "AdES signing demo portal (Axum + ades-rs) — not implemented yet"
+
+[dependencies]
