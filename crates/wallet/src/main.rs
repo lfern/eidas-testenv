@@ -10,6 +10,8 @@ use clap::{Parser, Subcommand};
     name = "wallet",
     about = "EUDIW test wallet: OID4VCI issuance + OID4VP presentation"
 )]
+/// Top-level CLI parser (see the `Command` variants for what each
+/// subcommand does).
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -34,6 +36,8 @@ enum Command {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // Dispatch straight to the module implementing each subcommand — no
+    // shared setup needed here beyond clap's own parsing.
     match cli.command {
         Command::Issue { url } => issue::run(&url).await,
         Command::Present { url } => present::run(&url).await,

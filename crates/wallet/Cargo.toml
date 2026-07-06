@@ -10,19 +10,21 @@ description = "CLI wallet exercising OID4VCI/OID4VP against the official EUDIW i
 [dependencies]
 openid4vp = { git = "https://github.com/spruceid/openid4vp" }
 # Holder-side OID4VCI: SpruceID also publishes an equivalent crate for the
-# issuance side, used here instead of hand-rolling the protocol.
-oid4vci = { git = "https://github.com/spruceid/oid4vci-rs" }
+# issuance side, used here instead of hand-rolling the protocol. The
+# "reqwest" feature pulls in its own vendored `reqwest` (re-exported as
+# `oid4vci::open_auth2::reqwest`) that implements the HttpClient trait the
+# crate's client methods require.
+oid4vci = { git = "https://github.com/spruceid/oid4vci-rs", features = ["reqwest"] }
+# Holder key representation shared with both `oid4vci` and `openid4vp`
+# (both pin the same version), so a single JWK works for issuance proofs
+# and, later, presentation key-binding.
+ssi = { version = "0.16", features = ["secp256r1"] }
 
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["full"] }
 
 clap = { version = "4", features = ["derive"] }
 
-p256 = { version = "0.13", features = ["ecdsa", "jwk"] }
-# Pinned to 0.6 to match p256/elliptic_curve 0.13's expected RNG trait
-# version (the dep tree also carries rand_core 0.9/0.10 transitively for
-# unrelated crates).
-rand_core = { version = "0.6", features = ["getrandom"] }
 sha2 = "0.10"
 # URL-safe base64 for JWT/SD-JWT compact segments (SD-JWT itself isn't a
 # crate we depend on elsewhere, so this is needed to hand-roll it).
@@ -30,6 +32,11 @@ base64 = "0.22"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Encoding the pre-authorized_code token request body: oid4vci's re-exported
+# reqwest (0.13, via open-auth2) doesn't enable its own "form" feature, and
+# we can't turn it on from here since we don't depend on reqwest 0.13
+# directly — so the request body is built by hand instead.
+serde_urlencoded = "0.7"
 
 anyhow = "1"
 # openid4vp's own reqwest dependency doesn't disable reqwest's default

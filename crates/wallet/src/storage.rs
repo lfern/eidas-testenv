@@ -5,14 +5,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::holder_key::{self, HolderKey};
 
-// `key` and the save/lookup methods below are consumed by the issue
-// (Phase 2) and present (Phase 3) flows, not yet wired up in Phase 1.
-#[allow(dead_code)]
+/// The local wallet state: its root directory on disk and its holder key.
 pub struct Wallet {
     pub root: PathBuf,
     pub key: HolderKey,
 }
 
+/// A credential received from an issuer (Phase 2), persisted as-is.
+///
+/// The wallet never parses or verifies `sd_jwt` — it's stored opaque and
+/// only read back to be handed to a verifier (Phase 3).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct StoredCredential {
     pub id: String,
@@ -23,7 +25,6 @@ pub struct StoredCredential {
     pub sd_jwt: String,
 }
 
-#[allow(dead_code)]
 impl Wallet {
     /// Resolve `~/.eidas-testenv/wallet/`, creating it (and loading or
     /// generating the holder key) if needed.
@@ -43,18 +44,22 @@ impl Wallet {
         self.root.join("credentials")
     }
 
+    /// Writes one credential as `credentials/<id>.json`.
     pub fn save_credential(&self, cred: &StoredCredential) -> Result<()> {
         let path = self.credentials_dir().join(format!("{}.json", cred.id));
         let contents = serde_json::to_string_pretty(cred).context("serializing credential")?;
         std::fs::write(&path, contents).with_context(|| format!("writing credential to {path:?}"))
     }
 
+    /// Reads every `credentials/*.json` file, oldest first.
     pub fn list_credentials(&self) -> Result<Vec<StoredCredential>> {
         let dir = self.credentials_dir();
         let mut out = Vec::new();
         for entry in std::fs::read_dir(&dir).with_context(|| format!("reading {dir:?}"))? {
             let entry = entry.with_context(|| format!("reading entry in {dir:?}"))?;
             let path = entry.path();
+            // Skip anything that isn't a credential file we wrote
+            // ourselves (e.g. stray files a user might drop in there).
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
@@ -64,12 +69,16 @@ impl Wallet {
                 .with_context(|| format!("parsing credential {path:?}"))?;
             out.push(cred);
         }
+        // received_at is an RFC 3339 string, so lexicographic order is
+        // chronological order.
         out.sort_by(|a, b| a.received_at.cmp(&b.received_at));
         Ok(out)
     }
 
     /// Find a stored credential matching the given verifiable credential
     /// type (`vct`), for use in the OID4VP presentation flow.
+    // Not yet wired up until the present (Phase 3) flow uses it.
+    #[allow(dead_code)]
     pub fn find_credential_by_vct(&self, vct: &str) -> Result<Option<StoredCredential>> {
         Ok(self.list_credentials()?.into_iter().find(|c| c.vct == vct))
     }
