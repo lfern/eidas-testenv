@@ -24,11 +24,13 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["full"] }
 
 clap = { version = "4", features = ["derive"] }
+# Required to implement openid4vp's `Wallet`/`RequestVerifier` traits (they
+# predate native async fn in traits), same version openid4vp itself uses.
+async-trait = "0.1"
+# `openid4vp::wallet::Wallet::validate_request` takes a `url::Url`.
+url = "2"
 
 sha2 = "0.10"
-# URL-safe base64 for JWT/SD-JWT compact segments (SD-JWT itself isn't a
-# crate we depend on elsewhere, so this is needed to hand-roll it).
-base64 = "0.22"
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

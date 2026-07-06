@@ -33,7 +33,13 @@ impl Wallet {
             .context("resolving home directory")?
             .home_dir()
             .to_path_buf();
-        let root = home.join(".eidas-testenv").join("wallet");
+        Self::open_at(home.join(".eidas-testenv").join("wallet"))
+    }
+
+    /// Same as [`Wallet::open`], but at an arbitrary root — split out so
+    /// tests can point it at a temporary directory instead of the real
+    /// `~/.eidas-testenv`.
+    fn open_at(root: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(root.join("credentials"))
             .with_context(|| format!("creating wallet directory {root:?}"))?;
         let key = holder_key::load_or_generate(&root.join("key.json"))?;
@@ -77,8 +83,6 @@ impl Wallet {
 
     /// Find a stored credential matching the given verifiable credential
     /// type (`vct`), for use in the OID4VP presentation flow.
-    // Not yet wired up until the present (Phase 3) flow uses it.
-    #[allow(dead_code)]
     pub fn find_credential_by_vct(&self, vct: &str) -> Result<Option<StoredCredential>> {
         Ok(self.list_credentials()?.into_iter().find(|c| c.vct == vct))
     }
@@ -98,4 +102,105 @@ pub fn list_and_print() -> Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `Wallet` rooted in a scratch directory under the OS temp dir,
+    /// cleaned up when dropped — no `~/.eidas-testenv` involved.
+    struct TempWallet {
+        wallet: Wallet,
+        root: PathBuf,
+    }
+
+    impl Drop for TempWallet {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn temp_wallet() -> TempWallet {
+        let root = std::env::temp_dir().join(format!(
+            "eidas-testenv-wallet-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let wallet = Wallet::open_at(root.clone()).unwrap();
+        TempWallet { wallet, root }
+    }
+
+    fn sample_credential(id: &str, vct: &str, received_at: &str) -> StoredCredential {
+        StoredCredential {
+            id: id.to_owned(),
+            credential_configuration_id: "eu.europa.ec.eudi.pid_vc_sd_jwt".to_owned(),
+            vct: vct.to_owned(),
+            issuer: "https://issuer.example.org".to_owned(),
+            received_at: received_at.to_owned(),
+            sd_jwt: "header.payload.sig~".to_owned(),
+        }
+    }
+
+    #[test]
+    fn starts_empty_and_round_trips_a_saved_credential() {
+        let temp = temp_wallet();
+
+        assert!(temp.wallet.list_credentials().unwrap().is_empty());
+
+        let cred = sample_credential("cred-1", "urn:eudi:pid:1", "2026-01-01T00:00:00Z");
+        temp.wallet.save_credential(&cred).unwrap();
+
+        let listed = temp.wallet.list_credentials().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "cred-1");
+        assert_eq!(listed[0].vct, "urn:eudi:pid:1");
+    }
+
+    #[test]
+    fn lists_credentials_oldest_first() {
+        let temp = temp_wallet();
+
+        temp.wallet
+            .save_credential(&sample_credential(
+                "newer",
+                "urn:eudi:pid:1",
+                "2026-06-01T00:00:00Z",
+            ))
+            .unwrap();
+        temp.wallet
+            .save_credential(&sample_credential(
+                "older",
+                "urn:eudi:pid:1",
+                "2026-01-01T00:00:00Z",
+            ))
+            .unwrap();
+
+        let listed = temp.wallet.list_credentials().unwrap();
+        assert_eq!(listed[0].id, "older");
+        assert_eq!(listed[1].id, "newer");
+    }
+
+    #[test]
+    fn find_credential_by_vct_matches_and_misses() {
+        let temp = temp_wallet();
+
+        temp.wallet
+            .save_credential(&sample_credential(
+                "cred-1",
+                "urn:eudi:pid:1",
+                "2026-01-01T00:00:00Z",
+            ))
+            .unwrap();
+
+        assert!(temp
+            .wallet
+            .find_credential_by_vct("urn:eudi:pid:1")
+            .unwrap()
+            .is_some());
+        assert!(temp
+            .wallet
+            .find_credential_by_vct("urn:eudi:other:1")
+            .unwrap()
+            .is_none());
+    }
 }

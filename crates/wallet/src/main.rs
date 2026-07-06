@@ -1,6 +1,7 @@
 mod holder_key;
 mod issue;
 mod present;
+mod sd_jwt;
 mod storage;
 
 use clap::{Parser, Subcommand};

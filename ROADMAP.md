@@ -26,6 +26,29 @@ Decisiones de diseño ya tomadas (resumen; la regla derivada está en
   (git, SpruceID) para OID4VCI — ambas inmaduras (0.1.x, git deps, poca
   documentación), se usan en vez de implementar los protocolos a mano.
 
+### Alcance actual — recordatorio de lo que NO cubrimos todavía
+
+Probado y verificado solo en un caso concreto, de los varios posibles en
+cada punto:
+
+- **Tipo de credencial**: solo **PID**. `issuer.eudiw.dev` ofrece muchas
+  más (Diploma, EHIC, Health ID, IBAN, Learning Credential, MSISDN, PDA1,
+  Power Of Representation, Tax Residency, Tax Number, mDL, Photo ID,
+  Certificate of Residence, Employee ID, Loyalty, Seafarer...) — ninguna
+  probada.
+- **Formato**: solo **SD-JWT VC** (`dc+sd-jwt`), nunca `mso_mdoc` —
+  decisión ya tomada y documentada en `CLAUDE.md` (sin CBOR/COSE), no es
+  un olvido.
+- **Perfil de presentación**: solo **`openid4vp`** (el genérico). No
+  probado contra **`haip`** (HAIP, el perfil más estricto que ofrece
+  `verifier.eudiw.dev`) — nuestro `present.rs` no implementa lo que ese
+  perfil exigiría de más (DPoP, client attestation, etc.).
+
+No bloquea nada ahora mismo — el `wallet` cumple su criterio de
+corrección (`CLAUDE.md`: "el flujo funciona end-to-end") para el caso que
+sí hemos probado. Queda anotado por si en el futuro hace falta ampliar a
+otro tipo/formato/perfil.
+
 Fases:
 
 - [x] **Phase 0** — esqueleto del repo: workspace, `docker-compose.yml`,
@@ -66,10 +89,74 @@ Fases:
       guardado correctamente; `wallet list` lo muestra
       (`vct=urn:eudi:pid:1`, disclosures de nombre/apellidos/fecha de
       nacimiento/etc. legibles en el SD-JWT resultante). Phase 2 cerrada.
-- [ ] **Phase 3** — flujo OID4VP `present` vía `openid4vp` +
-      `sd_jwt.rs` (parseo SD-JWT + key-binding JWT). Pendiente: URL de
-      presentation-request real desde `verifier.eudiw.dev`
+- [x] **Phase 3** — flujo OID4VP `present` implementado en
+      `present.rs` + `sd_jwt.rs`. Hallazgo: `ssi::claims::sd_jwt`
+      (re-exportado desde `ssi-sd-jwt`, ya en el árbol de dependencias vía
+      `ssi`) trae parseo de SD-JWT compacto y construcción/firma de KB-JWT
+      completos y correctos — `sd_jwt.rs` es una envoltura fina sobre eso
+      en vez de un parser hand-rolled desde cero (a diferencia de lo
+      previsto en el plan original). `present.rs` implementa los traits
+      `Wallet`/`RequestVerifier` de `openid4vp` (excepción a "sin traits
+      propios", igual que `oid4vci`): `x509_hash` y `x509_san_dns` ambos
+      implementados (delegando en los `validate()` ya provistos por
+      `openid4vp` con `P256Verifier`) porque no sabemos aún cuál de los dos
+      client-id schemes usa `verifier.eudiw.dev` — sin validar la cadena
+      hasta una root de confianza (no tenemos CA propia todavía, `ca` sigue
+      stub; coherente con que este entorno no tiene validez legal). Metadata
+      del wallet declarada solo con formato `dc+sd-jwt`. El match de
+      credencial guardada usa `dcql_query().meta().vct_values` contra
+      `storage::find_credential_by_vct`. Nuevas dependencias: `async-trait`
+      (exigido por los traits de `openid4vp`) y `url` (tipo que exige
+      `Wallet::validate_request`); se quitó `base64` (dependencia añadida
+      preventivamente en Phase 1, quedó sin usar tras este descubrimiento).
+      Build/clippy/fmt limpios; probado en frío (URL inválida, URL
+      sintética bien formada pero con `authorization_endpoint` que no
+      cuadra — falla limpio, sin pánicos). Además, 8 tests unitarios
+      añadidos sin red: `select_authorization_server` (`issue.rs`,
+      4 casos), `sd_jwt::append_key_binding` (genera un SD-JWT sintético
+      con `ssi`, comprueba que el KB-JWT resultante verifica con la clave
+      del holder), y `storage.rs` (guardado/listado/orden/búsqueda por
+      `vct`, con un `Wallet::open_at` interno para poder usar un directorio
+      temporal en vez de `~/.eidas-testenv`).
+
+      **Round-trip real contra `verifier.eudiw.dev`** — dos hallazgos
+      reales corregidos en el camino, ninguno anticipado por la
+      documentación de `openid4vp`:
+      1. El verifier pedía `response_mode=direct_post.jwt` (JARM, respuesta
+         cifrada), no `direct_post` plano. Arreglado usando
+         `openid4vp::core::jwe::build_encrypted_response` (ya provisto por
+         la librería) cuando `request.response_mode()` es
+         `DirectPostJwt`.
+      2. El verifier exige recibir de vuelta el `state` de la petición
+         original — lo omitíamos. Arreglado leyendo `request.state()` y
+         pasándolo tanto a la respuesta sin cifrar
+         (`UnencodedAuthorizationResponse::with_state`) como a
+         `build_encrypted_response`.
+      3. (No es bug nuestro) Un primer intento con un PID emitido el día
+         anterior falló con `IssuerCertificateIsNotTrusted` — el
+         certificado de firma de `issuer.eudiw.dev` había rotado desde la
+         emisión. Con un PID recién emitido, la presentación se aceptó sin
+         problemas.
+
+      **Confirmado (2026-07-07)**: `wallet present --url ...` contra una
+      petición real de `verifier.eudiw.dev` (client_id_scheme `x509_hash`)
+      completa el flujo entero — validación de la petición firmada,
+      emparejamiento DCQL por `vct`, KB-JWT firmado con la clave del
+      holder, respuesta JARM cifrada con `state`, aceptada por
+      `direct_post`. Phase 3 cerrada.
 - [ ] **Phase 4** — README + pulido final (clippy/fmt en todo el workspace)
+
+### Pendiente, sin prisa (anotado, no bloquea Phase 4)
+
+- **`find_credential_by_vct` coge el más antiguo, no el más reciente.**
+  `storage.rs` ordena `list_credentials()` de más antiguo a más nuevo y
+  hace `.find()`, que se queda con el primero — o sea, el PID más viejo
+  con ese `vct`. Si hay varios guardados con el mismo `vct` (p.ej. tras
+  reemitir un PID de prueba), `wallet present` presenta el viejo, no el
+  recién emitido — nos pasó durante las pruebas de Phase 3, tocó borrar el
+  antiguo a mano. Arreglo barato cuando se retome: invertir el criterio
+  para quedarse con el más reciente (`.max_by_key` sobre `received_at`, o
+  invertir el orden antes de `.find()`).
 
 ## ca / tl / verifier / portal
 

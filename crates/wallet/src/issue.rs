@@ -371,3 +371,53 @@ async fn fetch_nonce(http_client: &HttpClient, nonce_endpoint: &Uri) -> Result<S
 
     Ok(response.c_nonce)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn uri_buf(s: &str) -> UriBuf {
+        Uri::new(s).unwrap().to_owned()
+    }
+
+    #[test]
+    fn prefers_explicit_grant_authorization_server() {
+        let issuer = uri_buf("https://issuer.example.org");
+        let grant_server = uri_buf("https://as.example.org");
+
+        let result =
+            select_authorization_server(Some(grant_server.as_uri()), &issuer, &[]).unwrap();
+
+        assert_eq!(result.as_str(), "https://as.example.org");
+    }
+
+    #[test]
+    fn falls_back_to_issuer_when_it_acts_as_its_own_authorization_server() {
+        let issuer = uri_buf("https://issuer.example.org");
+
+        let result = select_authorization_server(None, &issuer, &[]).unwrap();
+
+        assert_eq!(result.as_str(), "https://issuer.example.org");
+    }
+
+    #[test]
+    fn uses_the_sole_issuer_authorization_server() {
+        let issuer = uri_buf("https://issuer.example.org");
+        let authorization_servers = [uri_buf("https://as.example.org")];
+
+        let result = select_authorization_server(None, &issuer, &authorization_servers).unwrap();
+
+        assert_eq!(result.as_str(), "https://as.example.org");
+    }
+
+    #[test]
+    fn errors_when_multiple_authorization_servers_are_ambiguous() {
+        let issuer = uri_buf("https://issuer.example.org");
+        let servers = [
+            uri_buf("https://as1.example.org"),
+            uri_buf("https://as2.example.org"),
+        ];
+
+        assert!(select_authorization_server(None, &issuer, &servers).is_err());
+    }
+}
