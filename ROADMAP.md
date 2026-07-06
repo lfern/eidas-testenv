@@ -144,7 +144,10 @@ Fases:
       emparejamiento DCQL por `vct`, KB-JWT firmado con la clave del
       holder, respuesta JARM cifrada con `state`, aceptada por
       `direct_post`. Phase 3 cerrada.
-- [ ] **Phase 4** — README + pulido final (clippy/fmt en todo el workspace)
+- [x] **Phase 4** — `README.md` escrito (pitch, tabla de estado de
+      componentes, guía rápida de `wallet`, alcance actual, comandos de
+      desarrollo, licencia). Pasada final de `cargo build/clippy/fmt/test
+      --workspace` limpia. Sprint de `wallet` cerrado.
 
 ### Pendiente, sin prisa (anotado, no bloquea Phase 4)
 

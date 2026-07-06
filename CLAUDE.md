@@ -123,6 +123,14 @@ componente tiene el suyo:
   funcionan hoy
 - No trabajar en `ca` / `tl` / `verifier` / `portal` más allá del stub
   hasta que les toque su sprint
+- **`wallet` no implementa firma remota cualificada (QES)** — solo
+  emisión (OID4VCI) y presentación (OID4VP) de credenciales, tal y como
+  dice su descripción arriba. Firmar con un certificado cualificado vía un
+  QTSP (típicamente API CSC / flujo "Remote QES" de eIDAS 2.0) es un
+  protocolo distinto de OID4VCI/OID4VP, y encaja más naturalmente con la
+  otra mitad del proyecto (`ades-rs` + `portal`) que con `wallet`. Si algún
+  día se aborda, decidir entonces si es un comando nuevo de `wallet` o un
+  módulo aparte — no asumirlo por precedente de este repo
 
 ## Licencia
 
