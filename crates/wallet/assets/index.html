@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>eidas-testenv — wallet</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    color-scheme: light dark;
+    --border: #8888;
+    --bg-soft: #80808014;
+    --accent: #4a7fd6;
+  }
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 780px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    line-height: 1.4;
+  }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin-bottom: 0.3rem; }
+  section {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1.2rem;
+  }
+  section.disabled { opacity: 0.55; }
+  .drop-zone {
+    border: 2px dashed var(--border);
+    border-radius: 6px;
+    padding: 0.8rem;
+    text-align: center;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+  }
+  .drop-zone.drag-over { border-color: var(--accent); background: var(--bg-soft); }
+  input[type="text"], textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.4rem;
+    font-family: inherit;
+    margin-bottom: 0.5rem;
+  }
+  button {
+    padding: 0.4rem 0.9rem;
+    cursor: pointer;
+  }
+  button:disabled { cursor: not-allowed; }
+  .result { margin-top: 0.6rem; font-size: 0.9rem; white-space: pre-wrap; }
+  .result.error { color: #c0392b; }
+  .result.ok { color: #1e8449; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  td, th { text-align: left; padding: 0.2rem 0.4rem; border-bottom: 1px solid var(--border); }
+  .hidden { display: none; }
+  .tx-code-row { display: flex; gap: 0.5rem; align-items: center; }
+</style>
+</head>
+<body>
+  <h1>eidas-testenv — wallet</h1>
+  <p>UI local (solo <code>127.0.0.1</code>) para los mismos flujos que la CLI
+  (<code>issue</code>/<code>present</code>/<code>list</code>). Pega o suelta
+  una captura del QR, o pega directamente la URL como texto.</p>
+
+  <section id="issue-section">
+    <h2>Emitir credencial (issue)</h2>
+    <div class="drop-zone" id="issue-drop">Pega (Ctrl+V) o suelta aquí una imagen del QR, o usa el campo de abajo</div>
+    <input type="file" id="issue-file" accept="image/*" class="hidden" />
+    <input type="text" id="issue-url" placeholder="URL de la oferta de credencial, o resultado del QR" />
+    <div id="issue-tx-code-row" class="tx-code-row hidden">
+      <span id="issue-tx-code-description"></span>
+      <input type="text" id="issue-tx-code" placeholder="Código de transacción" />
+    </div>
+    <button id="issue-submit">Emitir</button>
+    <div class="result" id="issue-result"></div>
+  </section>
+
+  <section id="present-section">
+    <h2>Presentar credencial (present)</h2>
+    <div class="drop-zone" id="present-drop">Pega (Ctrl+V) o suelta aquí una imagen del QR, o usa el campo de abajo</div>
+    <input type="file" id="present-file" accept="image/*" class="hidden" />
+    <input type="text" id="present-url" placeholder="URL de la petición del verifier, o resultado del QR" />
+    <button id="present-submit">Presentar</button>
+    <div class="result" id="present-result"></div>
+  </section>
+
+  <section id="credentials-section">
+    <h2>Credenciales guardadas</h2>
+    <table id="credentials-table">
+      <thead><tr><th>id</th><th>vct</th><th>issuer</th><th>received_at</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="disabled">
+    <h2>Firmar (QES)</h2>
+    <p>Fuera de alcance de <code>wallet</code> — ver <code>CLAUDE.md</code>: la
+    firma remota cualificada (QES) es un protocolo distinto (API CSC /
+    "Remote QES" contra un QTSP), no OID4VCI/OID4VP. Si algún día se aborda,
+    encaja más naturalmente en <code>ades-rs</code> + <code>portal</code>
+    que en este wallet.</p>
+    <button disabled>Firmar</button>
+  </section>
+
+<script>
+  async function postJson(path, body) {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  async function decodeQrBlob(blob) {
+    const res = await fetch("/api/decode-qr", {
+      method: "POST",
+      headers: { "content-type": blob.type || "application/octet-stream" },
+      body: blob,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data.text;
+  }
+
+  function showResult(el, text, isError) {
+    el.textContent = text;
+    el.className = "result " + (isError ? "error" : "ok");
+  }
+
+  /** Wires paste/drop/file-input on `dropZone`+`fileInput` to decode a QR
+   * image and fill `urlField`, showing errors in `resultEl`. */
+  function wireImageInput(dropZone, fileInput, urlField, resultEl) {
+    async function handleBlob(blob) {
+      try {
+        urlField.value = await decodeQrBlob(blob);
+        resultEl.textContent = "";
+      } catch (err) {
+        showResult(resultEl, `No se pudo leer el QR: ${err.message}`, true);
+      }
+    }
+
+    dropZone.addEventListener("click", () => fileInput.click());
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files[0]) handleBlob(fileInput.files[0]);
+    });
+    dropZone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropZone.classList.add("drag-over");
+    });
+    dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+    dropZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropZone.classList.remove("drag-over");
+      const file = e.dataTransfer.files[0];
+      if (file) handleBlob(file);
+    });
+    document.addEventListener("paste", (e) => {
+      for (const item of e.clipboardData.items) {
+        if (item.type.startsWith("image/")) {
+          handleBlob(item.getAsFile());
+          break;
+        }
+      }
+    });
+  }
+
+  // --- Emitir ---
+  const issueUrl = document.getElementById("issue-url");
+  const issueResult = document.getElementById("issue-result");
+  const issueTxCodeRow = document.getElementById("issue-tx-code-row");
+  const issueTxCodeDescription = document.getElementById("issue-tx-code-description");
+  const issueTxCode = document.getElementById("issue-tx-code");
+
+  wireImageInput(
+    document.getElementById("issue-drop"),
+    document.getElementById("issue-file"),
+    issueUrl,
+    issueResult
+  );
+
+  async function submitIssue() {
+    const url = issueUrl.value.trim();
+    if (!url) return;
+    const txCode = issueTxCodeRow.classList.contains("hidden") ? null : issueTxCode.value.trim();
+    try {
+      const outcome = await postJson("/api/issue", { url, tx_code: txCode || null });
+      if (outcome.status === "tx_code_required") {
+        issueTxCodeRow.classList.remove("hidden");
+        issueTxCodeDescription.textContent = outcome.description || "Introduce el código de transacción:";
+        showResult(issueResult, "Este offer requiere un código de transacción.", false);
+        return;
+      }
+      issueTxCodeRow.classList.add("hidden");
+      const lines = outcome.credentials.map((c) => `Guardada ${c.id} (vct=${c.vct}, issuer=${c.issuer})`);
+      showResult(issueResult, lines.join("\n"), false);
+      loadCredentials();
+    } catch (err) {
+      showResult(issueResult, `Error: ${err.message}`, true);
+    }
+  }
+  document.getElementById("issue-submit").addEventListener("click", submitIssue);
+
+  // --- Presentar ---
+  const presentUrl = document.getElementById("present-url");
+  const presentResult = document.getElementById("present-result");
+
+  wireImageInput(
+    document.getElementById("present-drop"),
+    document.getElementById("present-file"),
+    presentUrl,
+    presentResult
+  );
+
+  async function submitPresent() {
+    const url = presentUrl.value.trim();
+    if (!url) return;
+    try {
+      const outcome = await postJson("/api/present", { url });
+      let text = `Presentada credencial (vct=${outcome.vct}) a ${outcome.audience}`;
+      if (outcome.redirect) text += `\nRedirect solicitado: ${outcome.redirect}`;
+      showResult(presentResult, text, false);
+    } catch (err) {
+      showResult(presentResult, `Error: ${err.message}`, true);
+    }
+  }
+  document.getElementById("present-submit").addEventListener("click", submitPresent);
+
+  // --- Credenciales guardadas ---
+  async function loadCredentials() {
+    const res = await fetch("/api/credentials");
+    const creds = await res.json();
+    const tbody = document.querySelector("#credentials-table tbody");
+    tbody.innerHTML = "";
+    for (const c of creds) {
+      const tr = document.createElement("tr");
+      for (const value of [c.id, c.vct, c.issuer, c.received_at]) {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+  }
+  loadCredentials();
+</script>
+</body>
+</html>

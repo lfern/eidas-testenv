@@ -148,6 +148,33 @@ Fases:
       componentes, guía rápida de `wallet`, alcance actual, comandos de
       desarrollo, licencia). Pasada final de `cargo build/clippy/fmt/test
       --workspace` limpia. Sprint de `wallet` cerrado.
+- [x] **Phase 5** — `wallet serve`: UI web local (`127.0.0.1` únicamente)
+      que replica `issue`/`present`/`list` en el navegador, pensada para
+      pegar directamente una captura del QR en vez de copiar la URL a
+      mano. Decisión de diseño: el QR se decodifica **en Rust, en el
+      servidor** (`image` + `rqrr`), no con una librería JS de terceros —
+      el frontend (un único `assets/index.html`, vanilla JS, sin CDN ni
+      build step) solo manda los bytes de la imagen pegada/soltada y
+      pinta el JSON de vuelta. `image` fijado a `=0.25.6` exacto (0.25.7+
+      exige rustc 1.85, por encima del `rust-version = "1.80"` del
+      workspace). Refactor necesario en `issue.rs`/`present.rs`: el cuerpo
+      de `run()` pasó a `run_inner(...) -> Result<IssueOutcome |
+      PresentOutcome>` (structs/enum `#[derive(Serialize)]`), con `run()`
+      como wrapper fino que conserva exactamente el mismo comportamiento
+      de la CLI (incluido el prompt de `tx_code` por stdin) — así la
+      lógica de protocolo se comparte entre CLI y web sin duplicarla.
+      `serve.rs` expone `GET /`, `POST /api/decode-qr`, `POST /api/issue`,
+      `POST /api/present`, `GET /api/credentials`, con un adaptador
+      `ApiError` (`anyhow::Error` → `IntoResponse`) — mismo tipo de
+      excepción "trait exigido por una librería externa" ya aceptada para
+      `openid4vp`/`oid4vci`. La página incluye un cuarto bloque "Firmar"
+      visualmente presente pero deshabilitado, señalando que la firma QES
+      queda fuera de alcance de `wallet` (ver `CLAUDE.md`). Verificado:
+      build/test/fmt/clippy limpios en todo el workspace; `ss -tlnp`
+      confirma bind solo a `127.0.0.1`; `/api/decode-qr` probado con un
+      QR real generado con `python3-qrcode` (decodifica correctamente) y
+      con datos basura (error JSON legible, sin pánico ni 500 vacío);
+      `/api/credentials` coincide con la salida de `wallet list`.
 
 ### Pendiente, sin prisa (anotado, no bloquea Phase 4)
 

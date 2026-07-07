@@ -2,6 +2,7 @@ mod holder_key;
 mod issue;
 mod present;
 mod sd_jwt;
+mod serve;
 mod storage;
 
 use clap::{Parser, Subcommand};
@@ -32,6 +33,12 @@ enum Command {
     },
     /// List credentials stored locally.
     List,
+    /// Starts a local browser UI (127.0.0.1-only) mirroring
+    /// issue/present/list, with server-side QR decoding of pasted images.
+    Serve {
+        #[arg(long, default_value_t = 7890)]
+        port: u16,
+    },
 }
 
 #[tokio::main]
@@ -43,5 +50,6 @@ async fn main() -> anyhow::Result<()> {
         Command::Issue { url } => issue::run(&url).await,
         Command::Present { url } => present::run(&url).await,
         Command::List => storage::list_and_print(),
+        Command::Serve { port } => serve::run(port).await,
     }
 }

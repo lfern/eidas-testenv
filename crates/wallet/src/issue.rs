@@ -14,7 +14,7 @@ use oid4vci::{
     },
     CredentialOffer,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::storage::{StoredCredential, Wallet};
 
@@ -26,8 +26,69 @@ type HttpClient = oid4vci::open_auth2::reqwest::Client;
 /// RFC 8414 well-known path for OAuth 2.0 Authorization Server Metadata.
 const AUTHORIZATION_SERVER_WELL_KNOWN_PATH: &str = ".well-known/oauth-authorization-server";
 
+/// One credential saved as a result of an issuance.
+#[derive(Serialize)]
+pub struct SavedCredential {
+    pub id: String,
+    pub vct: String,
+    pub issuer: String,
+}
+
+/// Result of one [`run_inner`] call: either credential(s) were saved, or the
+/// offer requires a transaction code that wasn't supplied yet — the caller
+/// (the CLI's stdin prompt, or the web UI's tx_code field) collects it and
+/// calls [`run_inner`] again.
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum IssueOutcome {
+    Saved { credentials: Vec<SavedCredential> },
+    TxCodeRequired { description: Option<String> },
+}
+
 /// Runs the OID4VCI pre-authorized_code flow against a credential offer
-/// URL, saving any issued credential(s) to local storage.
+/// URL, prompting on stdin for a transaction code if the offer requires
+/// one, and printing a confirmation for each saved credential.
+///
+/// Thin wrapper around [`run_inner`] — see its doc comment for the actual
+/// flow and for why it's partly hand-rolled instead of using `oid4vci`'s
+/// own `Oid4vciClient`/`SimpleOid4vciClient`.
+pub async fn run(url: &str) -> Result<()> {
+    let credentials = match run_inner(url, None).await? {
+        IssueOutcome::Saved { credentials } => credentials,
+        IssueOutcome::TxCodeRequired { description } => {
+            if let Some(description) = &description {
+                println!("{description}");
+            }
+            print!("Enter transaction code: ");
+            io::stdout().flush().ok();
+            let mut input = String::new();
+            io::stdin()
+                .read_line(&mut input)
+                .context("reading transaction code from stdin")?;
+
+            match run_inner(url, Some(input.trim().to_owned())).await? {
+                IssueOutcome::Saved { credentials } => credentials,
+                IssueOutcome::TxCodeRequired { .. } => {
+                    bail!("issuer asked for a transaction code twice — unexpected")
+                }
+            }
+        }
+    };
+
+    for c in credentials {
+        println!(
+            "Saved credential {} (vct={}, issuer={})",
+            c.id, c.vct, c.issuer
+        );
+    }
+
+    Ok(())
+}
+
+/// Drives the OID4VCI pre-authorized_code flow against a credential offer
+/// URL, saving any issued credential(s) to local storage, and returning
+/// early with [`IssueOutcome::TxCodeRequired`] if the offer needs a
+/// transaction code that wasn't passed in `tx_code`.
 ///
 /// This hand-rolls the post-offer-resolution steps (authorization server
 /// metadata, token exchange, nonce, credential request) instead of using
@@ -40,7 +101,7 @@ const AUTHORIZATION_SERVER_WELL_KNOWN_PATH: &str = ".well-known/oauth-authorizat
 /// their latest published version). Everything else here (offer parsing,
 /// issuer metadata, credential/proof types) still comes straight from
 /// `oid4vci`.
-pub async fn run(url: &str) -> Result<()> {
+pub async fn run_inner(url: &str, tx_code: Option<String>) -> Result<IssueOutcome> {
     // The holder key was already generated (or loaded) in Phase 1 and is
     // reused across every issuance and, later, every presentation.
     let wallet = Wallet::open()?;
@@ -95,24 +156,18 @@ pub async fn run(url: &str) -> Result<()> {
     let token_endpoint = discover_token_endpoint(&http_client, authorization_server).await?;
 
     // If the offer requires a transaction code (a short PIN the issuer's
-    // web UI displayed to the person who created the offer), ask for it on
-    // stdin. Otherwise there's nothing more to collect before the token
-    // exchange.
-    let tx_code = match &grant.tx_code {
-        Some(definition) => {
-            if let Some(description) = &definition.description {
-                println!("{description}");
-            }
-            print!("Enter transaction code: ");
-            io::stdout().flush().ok();
-            let mut input = String::new();
-            io::stdin()
-                .read_line(&mut input)
-                .context("reading transaction code from stdin")?;
-            Some(input.trim().to_owned())
-        }
-        None => None,
-    };
+    // web UI displayed to the person who created the offer) and the caller
+    // didn't already supply one, bail out early — before the
+    // pre-authorized_code is consumed below — so it can be collected and
+    // this function called again with it.
+    if grant.tx_code.is_some() && tx_code.is_none() {
+        return Ok(IssueOutcome::TxCodeRequired {
+            description: grant
+                .tx_code
+                .as_ref()
+                .and_then(|definition| definition.description.clone()),
+        });
+    }
 
     // Step 5: POST to the token endpoint. This is the point where the
     // pre-authorized_code (plus tx_code, if any) is actually consumed —
@@ -214,6 +269,7 @@ pub async fn run(url: &str) -> Result<()> {
     // Step 9: persist the compact SD-JWT as-is. The wallet doesn't parse or
     // verify it — it's opaque storage until a future `present` (Phase 3)
     // needs to read it back out.
+    let mut saved = Vec::with_capacity(credentials.len());
     for credential in credentials {
         let sd_jwt = credential
             .value
@@ -230,13 +286,14 @@ pub async fn run(url: &str) -> Result<()> {
             sd_jwt,
         };
         wallet.save_credential(&stored)?;
-        println!(
-            "Saved credential {} (vct={}, issuer={})",
-            stored.id, stored.vct, stored.issuer
-        );
+        saved.push(SavedCredential {
+            id: stored.id,
+            vct: stored.vct,
+            issuer: stored.issuer,
+        });
     }
 
-    Ok(())
+    Ok(IssueOutcome::Saved { credentials: saved })
 }
 
 /// Picks the authorization server for a grant, mirroring

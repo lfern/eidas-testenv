@@ -52,3 +52,18 @@ openssl = { version = "0.10", features = ["vendored"] }
 directories = "5"
 uuid = { version = "1", features = ["v4"] }
 time = { version = "0.3", features = ["formatting"] }
+
+# Local browser UI (`wallet serve`, paste-a-QR workflow). Trimmed to the
+# minimal feature set actually used: no tower-http/tracing/form/query.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+# Decodes clipboard-pasted/dropped QR screenshots (PNG, occasionally JPEG)
+# into a pixel buffer for `rqrr` below. Pinned to an exact version: 0.25.7+
+# requires rustc 1.85, but this workspace's rust-version is 1.80.
+image = { version = "=0.25.6", default-features = false, features = [
+    "png",
+    "jpeg",
+] }
+# Pure-Rust QR grid detector/decoder (its default "img" feature bridges to
+# the `image` crate's ImageBuffer<Luma<u8>, _> above) — avoids vendoring a
+# JS-side QR decoder for the "paste a QR screenshot" workflow.
+rqrr = "0.10"

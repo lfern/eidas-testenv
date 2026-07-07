@@ -40,12 +40,21 @@ cargo run -p wallet -- present --url "<presentation-request-url>"
 
 # Listar las credenciales guardadas localmente
 cargo run -p wallet -- list
+
+# UI web local (127.0.0.1 únicamente): pega una captura del QR o la URL
+cargo run -p wallet -- serve --port 7890
 ```
 
 Las dos URLs (`issue`/`present`) son de un solo uso y hay que generarlas a
 mano desde la web del issuer/verifier — no se pueden scriptear. Ver
 [`MANUAL-TESTING.md`](MANUAL-TESTING.md) para el procedimiento paso a
 paso contra `issuer.eudiw.dev`/`verifier.eudiw.dev`.
+
+`wallet serve` levanta la misma funcionalidad (`issue`/`present`/`list`) en
+`http://127.0.0.1:<puerto>` — el QR se decodifica en el propio servidor
+(pura Rust, `image`+`rqrr`), sin ninguna librería JS de terceros. Nunca
+escucha en `0.0.0.0`: la clave privada del holder se guarda en claro en
+disco, así que no debe quedar accesible desde la red local.
 
 ### Dónde se guarda todo
 

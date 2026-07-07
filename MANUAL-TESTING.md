@@ -80,6 +80,30 @@ Si todo va bien:
 Presented credential (vct=urn:eudi:pid:1) to x509_hash:...
 ```
 
+## 3. Variante web (`wallet serve`)
+
+En vez de copiar la URL a mano y pegarla en `--url`, puedes usar la UI
+local:
+
+```bash
+cargo run -p wallet -- serve --port 7890
+```
+
+Abre `http://127.0.0.1:7890` en el navegador. En las secciones "Emitir" y
+"Presentar" puedes:
+
+- Pegar (Ctrl+V) una captura de pantalla del QR que muestra
+  `issuer.eudiw.dev`/`verifier.eudiw.dev`, soltarla arrastrándola, o
+  seleccionarla con el selector de fichero — se decodifica en el propio
+  servidor (no hace falta copiar la URL como texto).
+- O pegar directamente la URL como texto en el campo, exactamente igual
+  que con `--url`.
+
+El resto del comportamiento es el mismo que la CLI: si el offer requiere
+`tx_code`, aparece un campo para introducirlo; la sección "Credenciales
+guardadas" refleja lo mismo que `wallet list`. El servidor solo escucha en
+`127.0.0.1` — no lo expongas a la red local ni a internet.
+
 ## Notas importantes
 
 - **Las dos URLs son de un solo uso** — se consumen aunque el intento

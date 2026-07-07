@@ -18,6 +18,8 @@ use openid4vp::core::{
 use openid4vp::wallet::Wallet as Oid4vpWallet;
 use url::Url;
 
+use serde::Serialize;
+
 use crate::sd_jwt;
 use crate::storage::Wallet as StorageWallet;
 
@@ -114,8 +116,36 @@ fn wallet_metadata() -> Result<WalletMetadata> {
     Ok(metadata)
 }
 
-/// Runs the OID4VP presentation flow against a verifier's request URL.
+/// Result of a successful presentation.
+#[derive(Serialize)]
+pub struct PresentOutcome {
+    pub vct: String,
+    pub audience: String,
+    pub redirect: Option<String>,
+}
+
+/// Runs the OID4VP presentation flow against a verifier's request URL,
+/// printing a confirmation line (and any verifier-requested redirect).
+///
+/// Thin wrapper around [`run_inner`].
 pub async fn run(url: &str) -> Result<()> {
+    let outcome = run_inner(url).await?;
+
+    println!(
+        "Presented credential (vct={}) to {}",
+        outcome.vct, outcome.audience
+    );
+    if let Some(redirect) = &outcome.redirect {
+        println!("Verifier requested redirect: {redirect}");
+    }
+
+    Ok(())
+}
+
+/// Drives the OID4VP presentation flow against a verifier's request URL,
+/// returning the presented credential's `vct`, the verifier's `client_id`,
+/// and any redirect it requested.
+pub async fn run_inner(url: &str) -> Result<PresentOutcome> {
     let request_url = Url::parse(url).context("invalid presentation request URL")?;
 
     let storage_wallet = StorageWallet::open()?;
@@ -196,10 +226,9 @@ pub async fn run(url: &str) -> Result<()> {
         .await
         .context("submitting presentation")?;
 
-    println!("Presented credential (vct={}) to {audience}", stored.vct);
-    if let Some(redirect) = redirect {
-        println!("Verifier requested redirect: {redirect}");
-    }
-
-    Ok(())
+    Ok(PresentOutcome {
+        vct: stored.vct,
+        audience,
+        redirect: redirect.map(|url| url.to_string()),
+    })
 }
