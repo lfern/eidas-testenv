@@ -5,6 +5,23 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "ETSI TS 119 612 Trusted List XML generator — not implemented yet"
+description = "ETSI TS 119 612 Trusted List XML generator"
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# Codifica el DER del certificado del Root CA como el base64Binary que
+# exige el elemento X509Certificate del XSD de la TSL.
+base64 = "0.22"
+# Escritura de XML con escapado correcto (texto/atributos) en vez de
+# concatenar strings a mano; se usa solo la API de Writer, sin parser.
+quick-xml = "0.36"
+# Timestamps ListIssueDateTime/NextUpdate/StatusStartingTime en RFC 3339,
+# el formato que exige xsd:dateTime. Se prefiere a chrono por ser más
+# ligero y no depender de la base de datos de zonas horarias del sistema.
+time = { version = "0.3", features = ["formatting"] }
+# Misma versión pinnada que usa `ca` (0.2.0 no trae el feature
+# "builder", pero aquí solo hace falta (de)serialización PEM/DER, así
+# que basta con fijar la misma versión exacta por consistencia con el
+# resto del workspace).
+x509-cert = "=0.2.5"

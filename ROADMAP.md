@@ -266,7 +266,78 @@ Fases:
   hace falta simular explícitamente un "certificado cualificado" en vez
   de un leaf cert genérico.
 
-## tl / verifier / portal
+## tl (sprint activo)
+
+Decisiones de diseño ya tomadas:
+
+- **Generador estático (CLI), no un servicio.** `tl bootstrap` lee
+  `<ca-dir>/root/cert.pem` (el Root CA que ya produce `ca bootstrap`) y
+  escribe `<out-dir>/tl.xml` — mismo patrón que `ca`: se ejecuta una vez,
+  no queda nada corriendo.
+- **Alcance de esta primera fase**: un único `TrustServiceProvider` con un
+  único `TSPService` apuntando al Root CA, tipo de servicio `CA/QC`,
+  estado `granted`. Sin `AdditionalServiceInformation`, sin múltiples
+  TSPs/servicios, sin historial — se añaden si `verifier`/`portal` los
+  necesitan de verdad.
+- **Sin firma XAdES por ahora** (decisión explícita, confirmada con el
+  usuario) — se genera el XML en claro, sin `ds:Signature`. Firmar exige
+  una identidad de "scheme operator" y dependencias AdES que aún no están
+  decididas; queda como pendiente, igual que `ca` dejó pendientes las
+  QCStatements.
+- **`SchemeTerritory = "XX"`**: placeholder del rango ISO 3166-1
+  "user-assigned" (nunca asignado a un país real) — no hay operador de
+  esquema real detrás de esta TL de pruebas. El resto de campos de
+  identidad (nombre del operador, direcciones postal/electrónica) son
+  igualmente placeholders marcados como "no legal value"/"test
+  environment" en el propio texto.
+- **Librería**: `quick-xml` (escritura, con escapado correcto) en vez de
+  concatenar strings a mano; `base64` para el `X509Certificate`
+  (base64Binary del XSD); `time` (no `chrono`) para los timestamps
+  RFC 3339 que exige `xsd:dateTime`.
+
+Fases:
+
+- [x] **Phase 1** — `tl bootstrap` implementado en
+      `tsl.rs` (construcción pura del XML) + `bootstrap.rs` (lectura del
+      Root CA + CLI). Estructura verificada elemento por elemento contra
+      el XSD real de ETSI TS 119 612 v2.2.1 (namespace
+      `http://uri.etsi.org/02231/v2#`, descargado de
+      `uri.etsi.org/19612/v2.2.1/...xsd` — requiere un User-Agent de
+      navegador, si no devuelve una página HTML de aviso en vez del XSD)
+      antes de escribir el generador, no de memoria.
+
+      **Validación**: se había decidido `xmllint --schema` como criterio
+      de corrección (igual que `openssl verify` para `ca`), pero
+      `xmllint` (paquete `libxml2-utils`) no está instalado y este
+      entorno no tiene acceso root para instalarlo. Sustituido por
+      `lxml.etree.XMLSchema` (Python), que usa la misma librería
+      `libxml2` por debajo — mismo motor de validación, distinta
+      interfaz; si en el futuro se dispone de `xmllint`, es intercambiable
+      sin cambiar nada del generador. El propio XSD importa
+      `http://www.w3.org/2001/xml.xsd` (para `xml:lang`) y el schema de
+      XML-DSig (para `ds:Signature`, no usado en esta fase pero declarado
+      en el tipo); ambos se descargaron también y se resolvieron con un
+      `lxml.etree.Resolver` local en vez de dejar que la validación
+      dependa de red en tiempo de ejecución.
+
+      **Verificado**: `cargo build/clippy/fmt/test --workspace` limpios;
+      `cargo run -p tl -- bootstrap` genera `./data/tl/tl.xml` a partir de
+      `./data/ca/root/cert.pem`; `lxml.etree.XMLSchema(...).validate(...)`
+      da `True` contra el XSD oficial; el `<X509Certificate>` embebido
+      decodifica (base64) a los mismos bytes DER exactos que
+      `data/ca/root/cert.pem`. 2 tests unitarios sin red en `tsl.rs`
+      (bien-formado vía `quick_xml::Reader`, round-trip del base64 del
+      certificado). Phase 1 cerrada.
+
+### Pendiente, sin prisa (anotado, no bloquea Phase 1)
+
+- Firma XAdES-BES del `tl.xml` con un certificado de "scheme operator" —
+  diferida a propósito (ver decisiones arriba).
+- `AdditionalServiceInformation` / múltiples TSPs o servicios (p.ej. TSA,
+  OCSP como servicios separados en la TL) si `verifier`/`portal` acaban
+  necesitando distinguir tipos de servicio más allá del `CA/QC` único.
+
+## verifier / portal
 
 Solo stubs (`println!("not implemented yet")`). Sin sprint planificado
 todavía — se detallará aquí cuando arranque cada uno.
