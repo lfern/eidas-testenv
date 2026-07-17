@@ -475,6 +475,17 @@ checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
 [[package]]
 name = "ca"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "const-oid 0.9.6",
+ "p256",
+ "rand 0.8.6",
+ "rsa 0.9.10",
+ "sha2 0.10.9",
+ "signature",
+ "x509-cert",
+]
 
 [[package]]
 name = "cc"
@@ -3262,6 +3273,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pkcs1"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c8ffb9f10fa047879315e6625af03c164b16962a5368d724ed16323b68ace47f"
+dependencies = [
+ "der 0.7.10",
+ "pkcs8 0.10.2",
+ "spki 0.7.3",
+]
+
+[[package]]
 name = "pkcs8"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3823,10 +3845,31 @@ dependencies = [
  "num-integer",
  "num-iter",
  "num-traits",
- "pkcs1",
+ "pkcs1 0.3.3",
  "pkcs8 0.8.0",
  "rand_core 0.6.4",
  "smallvec",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "rsa"
+version = "0.9.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8573f03f5883dcaebdfcf4725caa1ecb9c15b2ef50c43a07b816e06799bb12d"
+dependencies = [
+ "const-oid 0.9.6",
+ "digest 0.10.7",
+ "num-bigint-dig",
+ "num-integer",
+ "num-traits",
+ "pkcs1 0.7.5",
+ "pkcs8 0.10.2",
+ "rand_core 0.6.4",
+ "sha2 0.10.9",
+ "signature",
+ "spki 0.7.3",
  "subtle",
  "zeroize",
 ]
@@ -4320,6 +4363,17 @@ checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
 dependencies = [
  "base16ct",
  "serde",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -4884,7 +4938,7 @@ dependencies = [
  "num-traits",
  "p256",
  "rand 0.8.6",
- "rsa",
+ "rsa 0.6.1",
  "serde",
  "serde_jcs",
  "serde_json",
@@ -4912,7 +4966,7 @@ dependencies = [
  "linked-data",
  "p256",
  "rand 0.8.6",
- "rsa",
+ "rsa 0.6.1",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -6285,6 +6339,8 @@ checksum = "1301e935010a701ae5f8655edc0ad17c44bad3ac5ce8c39185f75453b720ae94"
 dependencies = [
  "const-oid 0.9.6",
  "der 0.7.10",
+ "sha1",
+ "signature",
  "spki 0.7.3",
  "tls_codec",
 ]

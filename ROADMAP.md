@@ -188,7 +188,85 @@ Fases:
   para quedarse con el más reciente (`.max_by_key` sobre `received_at`, o
   invertir el orden antes de `.find()`).
 
-## ca / tl / verifier / portal
+## ca (sprint activo)
+
+Decisiones de diseño ya tomadas:
+
+- **Generador estático (CLI), no un servicio de emisión.** Se ejecuta una
+  vez (`ca bootstrap`), escribe certificados/claves a disco bajo
+  `./data/ca/` (ya referenciado por `docker-compose.yml`) y no queda nada
+  corriendo — igual que `tl` será "generador de Trusted List". No hay caso
+  de uso real hoy que justifique una API de emisión bajo demanda
+  (CSC/ACME-like).
+- **Cadena de 3 niveles**: Root CA (autofirmada) → Sub-CA (`pathlen:0`,
+  no puede emitir más sub-CAs) → 4 hojas firmadas por la sub-CA (TSA,
+  OCSP, dos user/signing certs). Root/Sub-CA/TSA/OCSP fijos en P-256 (son
+  plumbing de la cadena); el punto donde de verdad importa poder variar
+  el algoritmo es el certificado de firma ("user"), de ahí que
+  `bootstrap` genere por defecto uno P-256 y otro RSA-2048 — los dos que
+  `ades-rs`/`portal` necesitarán para probar ambos algoritmos.
+- **Librería**: `x509-cert` (RustCrypto, `builder` feature) para
+  construir los certificados, `p256`/`rsa` para las claves — todo puro
+  Rust, sin OpenSSL, coherente con `CLAUDE.md`. Verificado contra el
+  código fuente real de `x509-cert` v0.2.5 antes de implementar: el
+  perfil `Leaf` ya pone `KeyUsage(DigitalSignature | NonRepudiation)` por
+  defecto (sin el feature `hazmat`/`Manual`) y `ExtendedKeyUsage` puede
+  añadirse con `add_extension` sin chocar con nada que el perfil ya
+  genere — así que ninguno de los 5 tipos de certificado necesitó el
+  perfil `Manual`.
+
+Fases:
+
+- [x] **Phase 1** — `ca bootstrap`/`ca list` implementados en
+      `bootstrap.rs`/`list.rs`/`storage.rs`. Capa de almacenamiento:
+      `./data/ca/<rol>/{cert.pem,key.pem}` para
+      `root`/`sub-ca`/`tsa`/`ocsp`/`user-p256`/`user-rsa2048`; `bootstrap`
+      rechaza pisar un `out-dir` no vacío salvo `--force`. Números de
+      serie: 20 bytes aleatorios (bit alto del primer byte a 0, para que
+      la codificación DER INTEGER no necesite byte de signo extra),
+      siguiendo RFC 5280.
+
+      **Bug real encontrado y corregido durante la verificación con
+      `openssl verify`** (no anticipado por la compilación ni por
+      clippy): las funciones `issue_p256_leaf`/`issue_rsa_leaf` firmaban
+      cada hoja con la propia clave recién generada del leaf en vez de
+      con la clave de la sub-CA emisora — el certificado quedaba
+      criptográficamente autofirmado pese a declarar `issuer` = sub-CA en
+      el Name. `openssl verify` lo detectó de inmediato como
+      `error 30: authority and subject key identifier mismatch` (el AKI
+      de la hoja no coincidía con el SKI de la sub-CA). Arreglado pasando
+      `&sub_ca.key` como `cert_signer` en ambas funciones — la clave
+      propia del leaf sigue usándose para su `subject_public_key_info` (y
+      para `user-rsa2048`, `.build::<DerSignature>()` en vez de
+      `.build::<RsaSignature>()`, ya que quien firma es siempre la
+      sub-CA, en P-256, independientemente del algoritmo de la clave del
+      sujeto).
+
+      **Verificado**: `cargo build/clippy/fmt/test --workspace` limpios;
+      `cargo run -p ca -- bootstrap` genera los 6 pares cert/key;
+      `openssl verify -CAfile root/cert.pem -untrusted sub-ca/cert.pem
+      <hoja>/cert.pem` da `OK` en las 4 hojas y en la propia sub-ca;
+      `openssl x509 -ext basicConstraints,keyUsage,extendedKeyUsage`
+      confirma `CA:TRUE`/`pathlen:0` en root/sub-ca y el EKU correcto
+      (`Time Stamping` / `OCSP Signing`, ambos `critical`) en tsa/ocsp;
+      comprobado que cada `key.pem` corresponde a su `cert.pem`
+      (`openssl x509 -pubkey` vs `openssl pkey -pubout`, mismo hash
+      SHA-256). `cargo run -p ca -- list` relee los certificados y
+      muestra subject/issuer/serial/validez/algoritmo/EKU. Phase 1
+      cerrada.
+
+### Pendiente, sin prisa (anotado, no bloquea Phase 1)
+
+- `ca issue-user --cn ... --key-algo ...` para identidades ad-hoc
+  adicionales, si `portal`/`ades-rs` acaban necesitando más de los dos
+  user certs por defecto.
+- Extensión "OCSP No Check" (`id-pkix-ocsp-nocheck`) en el cert de OCSP,
+  si el stub de `docker/ocsp` la acaba necesitando.
+- QCStatements (ETSI EN 319 412-5) en el user cert si en algún momento
+  hace falta simular explícitamente un "certificado cualificado" en vez
+  de un leaf cert genérico.
+
+## tl / verifier / portal
 
 Solo stubs (`println!("not implemented yet")`). Sin sprint planificado
 todavía — se detallará aquí cuando arranque cada uno.

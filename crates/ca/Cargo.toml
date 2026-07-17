@@ -5,6 +5,31 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Test PKI chain generator (Root CA, Sub-CA, TSA, OCSP, user certs) — not implemented yet"
+description = "Static test PKI chain generator (Root CA, Sub-CA, TSA, OCSP, user certs)"
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# OIDs de propósito extendido (id-kp-timeStamping, id-kp-OCSPSigning) para
+# los certificados hoja de tsa/ocsp.
+const-oid = { version = "0.9", features = ["db"] }
+# Claves/firma ECDSA P-256 para root/sub-ca/tsa/ocsp/user-p256 (mismo
+# algoritmo que la clave del holder en `wallet`).
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+# Entropía para generación de claves y números de serie de certificado.
+rand = "0.8"
+# Claves/firma RSA-2048 para el certificado user-rsa2048 (variante
+# necesaria para poder probar ades-rs contra firmas tanto ECDSA como RSA).
+rsa = { version = "0.9", features = ["sha2"] }
+# Digest para firma RSA PKCS#1 v1.5; feature "oid" necesaria para que
+# `rsa::pkcs1v15::SigningKey<Sha256>` tenga el AlgorithmIdentifier que
+# exige el builder de x509-cert. Pinnado a 0.10.9 exacto: 0.10.0 (la
+# versión mínima que resuelve "0.10" sin lockfile previo) no tiene ese
+# feature todavía.
+sha2 = { version = "=0.10.9", features = ["oid"] }
+# Traits Signer/Keypair que exige `x509_cert::builder::CertificateBuilder`.
+signature = { version = "2", features = ["rand_core"] }
+# Construcción y (de)serialización PEM de certificados X.509 (RustCrypto,
+# puro Rust). Pinnado a 0.2.5 exacto: 0.2.0 (versión mínima que resuelve
+# "0.2" sin lockfile previo) no tiene el feature "builder" todavía.
+x509-cert = { version = "=0.2.5", features = ["builder"] }
