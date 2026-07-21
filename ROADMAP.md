@@ -176,17 +176,17 @@ Fases:
       con datos basura (error JSON legible, sin pánico ni 500 vacío);
       `/api/credentials` coincide con la salida de `wallet list`.
 
-### Pendiente, sin prisa (anotado, no bloquea Phase 4)
+### Pendientes resueltos
 
-- **`find_credential_by_vct` coge el más antiguo, no el más reciente.**
-  `storage.rs` ordena `list_credentials()` de más antiguo a más nuevo y
-  hace `.find()`, que se queda con el primero — o sea, el PID más viejo
-  con ese `vct`. Si hay varios guardados con el mismo `vct` (p.ej. tras
-  reemitir un PID de prueba), `wallet present` presenta el viejo, no el
-  recién emitido — nos pasó durante las pruebas de Phase 3, tocó borrar el
-  antiguo a mano. Arreglo barato cuando se retome: invertir el criterio
-  para quedarse con el más reciente (`.max_by_key` sobre `received_at`, o
-  invertir el orden antes de `.find()`).
+- **`find_credential_by_vct` cogía el más antiguo, no el más reciente**
+  (2026-07-21). `storage.rs`: cambiado de `.find()` (se quedaba con el
+  primero tras ordenar de más antiguo a más nuevo) a
+  `.filter(...).max_by_key(|c| c.received_at.clone())` — ahora
+  `wallet present` usa siempre el PID recién emitido cuando hay varios
+  guardados con el mismo `vct`. Test añadido
+  (`find_credential_by_vct_picks_the_most_recent_match`, dos credenciales
+  con el mismo `vct` y `received_at` distinto). Build/clippy/fmt/test
+  limpios en todo el workspace.
 
 ## ca (sprint activo)
 

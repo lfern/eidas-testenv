@@ -81,10 +81,15 @@ impl Wallet {
         Ok(out)
     }
 
-    /// Find a stored credential matching the given verifiable credential
-    /// type (`vct`), for use in the OID4VP presentation flow.
+    /// Find the most recently received stored credential matching the given
+    /// verifiable credential type (`vct`), for use in the OID4VP
+    /// presentation flow.
     pub fn find_credential_by_vct(&self, vct: &str) -> Result<Option<StoredCredential>> {
-        Ok(self.list_credentials()?.into_iter().find(|c| c.vct == vct))
+        Ok(self
+            .list_credentials()?
+            .into_iter()
+            .filter(|c| c.vct == vct)
+            .max_by_key(|c| c.received_at.clone()))
     }
 }
 
@@ -202,5 +207,32 @@ mod tests {
             .find_credential_by_vct("urn:eudi:other:1")
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn find_credential_by_vct_picks_the_most_recent_match() {
+        let temp = temp_wallet();
+
+        temp.wallet
+            .save_credential(&sample_credential(
+                "older",
+                "urn:eudi:pid:1",
+                "2026-01-01T00:00:00Z",
+            ))
+            .unwrap();
+        temp.wallet
+            .save_credential(&sample_credential(
+                "newer",
+                "urn:eudi:pid:1",
+                "2026-06-01T00:00:00Z",
+            ))
+            .unwrap();
+
+        let found = temp
+            .wallet
+            .find_credential_by_vct("urn:eudi:pid:1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.id, "newer");
     }
 }
