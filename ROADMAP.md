@@ -337,7 +337,111 @@ Fases:
   OCSP como servicios separados en la TL) si `verifier`/`portal` acaban
   necesitando distinguir tipos de servicio más allá del `CA/QC` único.
 
-## verifier / portal
+## portal (sprint activo)
 
-Solo stubs (`println!("not implemented yet")`). Sin sprint planificado
-todavía — se detallará aquí cuando arranque cada uno.
+Decisiones de diseño ya tomadas:
+
+- **Web local (Axum), mismo patrón que `wallet serve`**: bind
+  `127.0.0.1` únicamente (lee claves de firma en claro de
+  `<ca-dir>/*/key.pem`, igual que `wallet serve` nunca expone la clave del
+  holder), un único `assets/index.html` (vanilla JS, sin CDN ni build
+  step) servido con `include_str!`, mismo adaptador `ApiError`
+  (`anyhow::Error -> IntoResponse`) que `wallet/src/serve.rs`. Todo el
+  API es JSON — el navegador lee el archivo con `FileReader`, lo
+  base64-codifica y postea JSON; sin multipart.
+- **No depende de `ca` como librería**: todos los crates del workspace son
+  binarios (`CLAUDE.md`), así que no hay un crate de librería compartida.
+  `portal` relee `<ca-dir>/<role>/{cert.pem,key.pem}` con unas pocas
+  líneas propias (`sign.rs`), reflejando el layout de `ca::storage` sin
+  importarlo — la misma duplicación mínima y deliberada que ya acepta
+  `CLAUDE.md` en otros puntos (YAGNI, sin crate compartido por ahora).
+- **Alcance de esta primera fase**: solo firmar, un formato (CAdES B-B,
+  detached), usando los dos certs que ya produce `ca bootstrap`
+  (`user-p256`/`user-rsa2048`). Sin verificación integrada (se comprueba
+  fuera, con `openssl cms -verify` o el DSS de la CE — criterio de
+  corrección ya fijado en `CLAUDE.md` para este crate), sin PAdES/XAdES/
+  JAdES ni B-T/B-LT todavía (no hay TSA/OCSP real corriendo — `docker/tsa`
+  y `docker/ocsp` siguen siendo placeholders).
+- **Librería**: `ades-rs` (crates.io, la librería AdES del mismo autor,
+  ver `CLAUDE.md`) — features por defecto (`cades`/`pades`/`soft`) son
+  suficientes. `SoftSigner::from_parts`/`from_ec_parts`
+  (`ades::signer::SoftSigner`) cargan un par cert+clave **ya existente**
+  (a diferencia de `generate()`/`generate_ec()`, que crean uno autofirmado
+  nuevo) — hay incluso un test en el propio repo de `ades-rs`
+  (`crates/ades/tests/cades_bb_ec.rs`) documentado explícitamente como
+  réplica de este caso de uso. PEM→DER del certificado vía
+  `x509_cert::Certificate::from_pem(..)?.to_der()?` (mismo crate/patrón
+  que `ca/src/list.rs` ya usa para leer `cert.pem`); PEM→clave tipada vía
+  `rsa::RsaPrivateKey::from_pkcs8_pem`/`p256::ecdsa::SigningKey::from_pkcs8_pem`.
+
+  **Hallazgo real durante la integración** (no anticipado por el diseño):
+  `ades-rs`'s Cargo.toml pide `x509-cert` con el feature `hazmat`
+  (necesario para JAdES/otras partes de esa librería). Cargo unifica
+  features de una misma versión de dependencia en todo el grafo de un
+  build de workspace, así que en cuanto `portal` (vía `ades-rs`) entró al
+  workspace, `x509-cert`'s feature `hazmat` se activó también para `ca`
+  — que no lo pedía — y `hazmat` añade un campo nuevo
+  (`include_subject_key_identifier`) a `Profile::Leaf` que `ca`'s
+  `bootstrap.rs` no rellenaba, rompiendo la compilación de `ca` con
+  `cargo clippy --workspace`/`cargo test --workspace` (aunque `cargo build
+  -p ca` en aislado seguía compilando, con el campo simplemente ausente).
+  Arreglado declarando `hazmat` explícitamente en el propio
+  `ca/Cargo.toml` (en vez de depender implícitamente de que otro crate lo
+  active por unificación) y fijando `include_subject_key_identifier: true`
+  en los dos `Profile::Leaf` de `bootstrap.rs` — `true` reproduce el
+  comportamiento anterior a que ese campo existiera (la extensión
+  SubjectKeyIdentifier siempre se generaba); confirmado que sigue
+  presente y que `openssl verify`/AKI-SKI de las 5 hojas sigue dando `OK`
+  tras el cambio.
+
+Fases:
+
+- [x] **Phase 1** — `portal serve` implementado en `serve.rs` (router
+      Axum) + `sign.rs` (lógica de firma, sin Axum, testable sin
+      servidor) + `main.rs` (CLI `serve --port --ca-dir`) +
+      `assets/index.html`. `sign::sign(ca_dir, cert_role, data)` valida
+      `cert_role` (`user-p256`/`user-rsa2048`), carga el `SoftSigner`
+      correspondiente y llama a `ades::cades::sign`, devolviendo el CMS
+      `ContentInfo` DER en base64. `sign::available_cert_roles` filtra a
+      los roles que de verdad tienen `cert.pem` en disco, para que la UI
+      solo ofrezca los que existen. 4 tests unitarios sin red en
+      `sign.rs`: firma con una identidad P-256 y otra RSA-2048 generadas
+      en memoria (par cert/clave *no* correspondiente entre sí a
+      propósito — el test solo comprueba el cableado PEM→`cades::sign`,
+      no la corrección criptográfica, que se comprueba fuera, ver abajo),
+      `cert_role` desconocido rechazado, `available_cert_roles` filtra
+      correctamente.
+
+      **Verificado**: `cargo build/clippy/fmt/test --workspace` limpios;
+      `cargo run -p portal -- serve` levanta en `127.0.0.1:8090`
+      (confirmado con `ss -tlnp`, nunca `0.0.0.0`); `GET /api/certs`
+      devuelve `["user-p256","user-rsa2048"]` contra un `./data/ca` real;
+      `POST /api/sign` con cada uno de los dos certs produce un CMS
+      `ContentInfo` DER válido (`0x30` inicial) que
+      `openssl cms -verify -binary -in <sig> -inform DER -content
+      <original> -CAfile <(root+sub-ca)` acepta como válido para ambos
+      algoritmos (nota: `-binary` es imprescindible — sin él, `openssl
+      cms -verify` aplica canonicalización S/MIME al contenido y falla
+      aunque la firma sea correcta; confirmado inspeccionando la firma con
+      `asn1crypto`/`cryptography` en Python que el `messageDigest` firmado
+      coincide exactamente con el SHA-256 del contenido y que la firma
+      ECDSA verifica sobre el re-tag SET OF de los `signedAttrs`, tal y
+      como exige RFC 5652 §5.4 — no era un bug de `ades-rs`, solo faltaba
+      el flag en mi propio comando de verificación). Pendiente para el
+      usuario: subir la misma firma al validador DSS de la CE
+      (https://dss.nowina.lu/validation), el criterio de corrección que
+      fija `CLAUDE.md` para este crate. Phase 1 cerrada.
+
+### Pendiente, sin prisa (anotado, no bloquea Phase 1)
+
+- Verificación integrada en el propio `portal` (subir firma + original y
+  comprobar in situ), en vez de depender de `openssl`/DSS externos.
+- PAdES/XAdES/JAdES, y niveles B-T/B-LT — bloqueados por no tener
+  TSA/OCSP reales corriendo (`docker/tsa`/`docker/ocsp` siguen stub).
+- Más identidades de firma además de `user-p256`/`user-rsa2048`, si
+  `ca` acaba añadiendo `ca issue-user` (ver pendientes de `ca` arriba).
+
+## verifier
+
+Solo stub (`println!("not implemented yet")`). Sin sprint planificado
+todavía — se detallará aquí cuando arranque.

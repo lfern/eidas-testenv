@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<title>eidas-testenv — portal</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    color-scheme: light dark;
+    --border: #8888;
+    --bg-soft: #80808014;
+    --accent: #4a7fd6;
+  }
+  body {
+    font-family: system-ui, sans-serif;
+    max-width: 780px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    line-height: 1.4;
+  }
+  h1 { font-size: 1.3rem; }
+  h2 { font-size: 1.05rem; margin-bottom: 0.3rem; }
+  section {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1.2rem;
+  }
+  select, input[type="file"] {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.4rem;
+    font-family: inherit;
+    margin-bottom: 0.5rem;
+  }
+  button {
+    padding: 0.4rem 0.9rem;
+    cursor: pointer;
+  }
+  button:disabled { cursor: not-allowed; }
+  .result { margin-top: 0.6rem; font-size: 0.9rem; white-space: pre-wrap; word-break: break-all; }
+  .result.error { color: #c0392b; }
+  .result.ok { color: #1e8449; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <h1>eidas-testenv — portal</h1>
+  <p>UI local (solo <code>127.0.0.1</code>) para firmar un archivo con uno de
+  los certificados que genera <code>ca bootstrap</code>. Produce una firma
+  CAdES B-B (CMS/PKCS#7) <em>detached</em> — guarda también el archivo
+  original, hace falta para verificar la firma después.</p>
+
+  <section id="sign-section">
+    <h2>Firmar (CAdES B-B)</h2>
+    <input type="file" id="sign-file" />
+    <select id="sign-cert-role"></select>
+    <button id="sign-submit" disabled>Firmar</button>
+    <div class="result" id="sign-result"></div>
+    <a id="sign-download" class="hidden" download="signature.p7s">Descargar firma (.p7s)</a>
+  </section>
+
+<script>
+  async function postJson(path, body) {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  }
+
+  function showResult(el, text, isError) {
+    el.textContent = text;
+    el.className = "result " + (isError ? "error" : "ok");
+  }
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(",")[1]);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function base64ToBlob(base64) {
+    const bytes = atob(base64);
+    const buf = new Uint8Array(bytes.length);
+    for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
+    return new Blob([buf], { type: "application/pkcs7-signature" });
+  }
+
+  const fileInput = document.getElementById("sign-file");
+  const certRoleSelect = document.getElementById("sign-cert-role");
+  const submitButton = document.getElementById("sign-submit");
+  const resultEl = document.getElementById("sign-result");
+  const downloadLink = document.getElementById("sign-download");
+
+  function updateSubmitEnabled() {
+    submitButton.disabled = !fileInput.files[0] || !certRoleSelect.value;
+  }
+  fileInput.addEventListener("change", updateSubmitEnabled);
+  certRoleSelect.addEventListener("change", updateSubmitEnabled);
+
+  async function loadCertRoles() {
+    const res = await fetch("/api/certs");
+    const roles = await res.json();
+    certRoleSelect.innerHTML = "";
+    if (roles.length === 0) {
+      const opt = document.createElement("option");
+      opt.textContent = "(sin certificados — ejecuta `ca bootstrap`)";
+      certRoleSelect.appendChild(opt);
+      certRoleSelect.disabled = true;
+      return;
+    }
+    for (const role of roles) {
+      const opt = document.createElement("option");
+      opt.value = role;
+      opt.textContent = role;
+      certRoleSelect.appendChild(opt);
+    }
+    updateSubmitEnabled();
+  }
+  loadCertRoles();
+
+  async function submitSign() {
+    const file = fileInput.files[0];
+    if (!file) return;
+    downloadLink.classList.add("hidden");
+    try {
+      const dataBase64 = await fileToBase64(file);
+      const outcome = await postJson("/api/sign", {
+        cert_role: certRoleSelect.value,
+        data_base64: dataBase64,
+      });
+      showResult(
+        resultEl,
+        `Firmado con ${outcome.cert_role} (${outcome.digest_algorithm}).`,
+        false
+      );
+      const blob = base64ToBlob(outcome.signature_der_base64);
+      downloadLink.href = URL.createObjectURL(blob);
+      downloadLink.download = `${file.name}.p7s`;
+      downloadLink.classList.remove("hidden");
+    } catch (err) {
+      showResult(resultEl, `Error: ${err.message}`, true);
+    }
+  }
+  submitButton.addEventListener("click", submitSign);
+</script>
+</body>
+</html>

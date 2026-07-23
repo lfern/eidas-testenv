@@ -5,6 +5,33 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "AdES signing demo portal (Axum + ades-rs) — not implemented yet"
+description = "AdES signing demo portal (Axum + ades-rs)"
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+
+# CAdES B-B signing over the identities `ca bootstrap` already produces.
+# Default features (cades/pades/soft) are all this phase needs.
+ades-rs = "0.2"
+# Parses `<ca-dir>/<role>/cert.pem` (PEM -> DER) to hand to
+# `ades::signer::SoftSigner::from_parts`/`from_ec_parts`. Default features
+# only (no "builder": portal never constructs certificates, only reads the
+# ones `ca` already wrote).
+x509-cert = "=0.2.5"
+# Loads the RSA-2048 signing key (PEM -> RsaPrivateKey), same version `ca`
+# pins. "getrandom" is needed only by tests (they generate throwaway
+# in-memory identities instead of shelling out to `ca bootstrap`).
+rsa = { version = "0.9", features = ["sha2", "getrandom"] }
+# Loads the P-256 signing key (PEM -> SigningKey); "pkcs8" feature for
+# `from_pkcs8_pem`, same declaration `ca` already uses.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+base64 = "0.22"
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Local browser UI (upload a file, pick a cert, sign). Trimmed to the
+# minimal feature set actually used, same as `wallet`.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }

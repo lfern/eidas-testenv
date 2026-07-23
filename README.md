@@ -19,9 +19,9 @@ certificados reales de un QTSP.
 |-------|--------|--------|
 | `wallet` | CLI que obtiene (OID4VCI) y presenta (OID4VP) una credencial PID contra los endpoints oficiales de la CE | En desarrollo — `issue`/`present`/`list` funcionales |
 | `ca` | Generador estático de PKI de pruebas (Root CA, Sub-CA, TSA, OCSP, user certs) | En desarrollo — `bootstrap`/`list` funcionales |
-| `tl` | Generador de Trusted List (ETSI TS 119 612) | Stub, sin implementar |
+| `tl` | Generador de Trusted List (ETSI TS 119 612) | En desarrollo — `bootstrap` funcional |
 | `verifier` | Verifier OID4VP propio | Stub, sin implementar |
-| `portal` | Portal de demo AdES | Stub, sin implementar |
+| `portal` | Portal de demo AdES (firma CAdES B-B) | En desarrollo — `serve` funcional |
 
 Ver [`ROADMAP.md`](ROADMAP.md) para el detalle de fases y decisiones de
 diseño del sprint activo, y [`CLAUDE.md`](CLAUDE.md) para las reglas
@@ -114,6 +114,31 @@ para poder probar `ades-rs` contra ambos algoritmos).
 
 Claves privadas en PKCS#8 PEM sin cifrar (entorno de pruebas, sin validez
 legal — ver aviso arriba). `./data/` está en `.gitignore`.
+
+## `portal` — guía rápida
+
+### Comandos
+
+```bash
+# UI web local (127.0.0.1 únicamente): sube un archivo, elige un cert de
+# `ca bootstrap` (user-p256 / user-rsa2048), firma en CAdES B-B
+cargo run -p portal -- serve --port 8090 --ca-dir ./data/ca
+```
+
+Firma **detached** (el archivo original no queda embebido en la firma —
+hace falta guardarlo aparte para verificar después). Requiere haber
+ejecutado antes `ca bootstrap` (u otro `--ca-dir` con la misma estructura
+`<role>/{cert.pem,key.pem}`).
+
+```bash
+# Verificación local sin depender del DSS de la CE
+openssl cms -verify -binary -in firma.p7s -inform DER -content original.txt \
+  -CAfile <(cat data/ca/root/cert.pem data/ca/sub-ca/cert.pem)
+```
+
+(`-binary` es obligatorio — sin él, `openssl cms -verify` aplica
+canonicalización S/MIME al contenido y la verificación falla aunque la
+firma sea correcta.)
 
 ## Comandos de desarrollo
 

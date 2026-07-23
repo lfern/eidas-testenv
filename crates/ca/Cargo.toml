@@ -32,4 +32,8 @@ signature = { version = "2", features = ["rand_core"] }
 # Construcción y (de)serialización PEM de certificados X.509 (RustCrypto,
 # puro Rust). Pinnado a 0.2.5 exacto: 0.2.0 (versión mínima que resuelve
 # "0.2" sin lockfile previo) no tiene el feature "builder" todavía.
-x509-cert = { version = "=0.2.5", features = ["builder"] }
+# "hazmat" añade el campo `include_subject_key_identifier` a
+# `Profile::Leaf` — se declara aquí explícitamente en vez de depender de
+# que `portal` (vía `ades-rs`) lo active por unificación de features del
+# workspace, que sería un comportamiento implícito y frágil.
+x509-cert = { version = "=0.2.5", features = ["builder", "hazmat"] }

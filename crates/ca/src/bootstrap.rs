@@ -113,6 +113,11 @@ fn issue_p256_leaf(
         issuer: sub_ca.cert.tbs_certificate.subject.clone(),
         enable_key_agreement: false,
         enable_key_encipherment: false,
+        // `true` keeps the SubjectKeyIdentifier extension that was always
+        // emitted before "hazmat" made this field exist — dropping it
+        // would silently regress the AKI/SKI chain check `ca list`'s
+        // `openssl verify` round already relies on.
+        include_subject_key_identifier: true,
     };
     let mut builder = CertificateBuilder::new(
         profile,
@@ -147,6 +152,11 @@ fn issue_rsa_leaf(
         issuer: sub_ca.cert.tbs_certificate.subject.clone(),
         enable_key_agreement: false,
         enable_key_encipherment: false,
+        // `true` keeps the SubjectKeyIdentifier extension that was always
+        // emitted before "hazmat" made this field exist — dropping it
+        // would silently regress the AKI/SKI chain check `ca list`'s
+        // `openssl verify` round already relies on.
+        include_subject_key_identifier: true,
     };
     // The leaf's own key (RSA-2048) only backs its subject public key —
     // the certificate itself is signed by the sub-CA's (P-256) key, same
