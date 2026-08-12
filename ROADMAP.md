@@ -427,10 +427,20 @@ Fases:
       coincide exactamente con el SHA-256 del contenido y que la firma
       ECDSA verifica sobre el re-tag SET OF de los `signedAttrs`, tal y
       como exige RFC 5652 §5.4 — no era un bug de `ades-rs`, solo faltaba
-      el flag en mi propio comando de verificación). Pendiente para el
-      usuario: subir la misma firma al validador DSS de la CE
-      (https://dss.nowina.lu/validation), el criterio de corrección que
-      fija `CLAUDE.md` para este crate. Phase 1 cerrada.
+      el flag en mi propio comando de verificación).
+
+      **Validado contra el DSS de la CE** (2026-08-12,
+      https://dss.nowina.lu/validation, política "QES AES/QC QES TL
+      based"): firma `user-p256` subida junto al documento original —
+      `Signature format: CAdES-BASELINE-B` reconocido, `Signature scope:
+      original.txt (FULL)` (documento y firma correctamente emparejados),
+      `Indication: INDETERMINATE` / `Sub indication:
+      NO_CERTIFICATE_CHAIN_FOUND` ("The certificate chain for signature is
+      not trusted, it does not contain a trust anchor.") — resultado
+      correcto y esperado, no un fallo: la política valida contra las
+      Trusted Lists reales de la UE, y la CA de `ca bootstrap` es de
+      pruebas, no está en ninguna TL real. Cierra el criterio de corrección
+      que fija `CLAUDE.md` para este crate. Phase 1 cerrada.
 
 ### Pendiente, sin prisa (anotado, no bloquea Phase 1)
 

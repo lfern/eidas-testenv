@@ -140,6 +140,39 @@ openssl cms -verify -binary -in firma.p7s -inform DER -content original.txt \
 canonicalización S/MIME al contenido y la verificación falla aunque la
 firma sea correcta.)
 
+### Verificación contra el DSS de la Comisión Europea
+
+Además de `openssl` (verificación local, sin red), la firma se puede
+comprobar con el validador de referencia oficial,
+[dss.nowina.lu/validation](https://dss.nowina.lu/validation) — el mismo
+criterio de corrección que fija `CLAUDE.md` para este crate.
+
+1. `cargo run -p portal -- serve --port 8090 --ca-dir ./data/ca` (requiere
+   haber ejecutado antes `ca bootstrap`).
+2. Abrir `http://127.0.0.1:8090`, subir cualquier archivo, elegir un cert
+   (`user-p256` o `user-rsa2048`) y pulsar "Firmar".
+3. Pulsar "Descargar firma (.p7s)" — es una firma **detached**, así que
+   además de ese `.p7s` hace falta el archivo original que se subió en el
+   paso 2 (el mismo que ya está en el disco del usuario).
+4. En `https://dss.nowina.lu/validation`, subir el `.p7s` en **"Signed
+   file"** y el archivo original en **"Original file(s)"**, dejar el resto
+   de opciones por defecto y pulsar **Validate**.
+
+**Resultado esperado**: `Signature format: CAdES-BASELINE-B`,
+`Signature scope: <archivo> (FULL)` (documento y firma correctamente
+emparejados) y `Indication: INDETERMINATE` /
+`Sub indication: NO_CERTIFICATE_CHAIN_FOUND` ("The certificate chain for
+signature is not trusted, it does not contain a trust anchor."). Ese
+`INDETERMINATE` es correcto, no un fallo: la política de validación del
+DSS comprueba la cadena contra las Trusted Lists reales de la UE, y la CA
+de `ca bootstrap` es de pruebas — no está en ninguna TL real (ver aviso de
+"Sin validez legal" al principio de este documento). Un `TOTAL_FAILED` o
+un error de integridad de la firma sí indicaría un problema real.
+
+No existe (todavía) un script que automatice la subida al DSS — su
+formulario web no es una API pública pensada para *scripting* — así que
+este paso se hace a mano, en el navegador.
+
 ## Comandos de desarrollo
 
 ```bash
