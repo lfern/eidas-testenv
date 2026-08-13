@@ -12,9 +12,18 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 
-# CAdES B-B signing over the identities `ca bootstrap` already produces.
-# Default features (cades/pades/soft) are all this phase needs.
-ades-rs = "0.2"
+# CAdES B-B/B-T signing over the identities `ca bootstrap` already
+# produces. Default features (cades/pades/soft) plus "tsp": B-T needs
+# `ades::tsp::TspClient` to fetch a timestamp from the `tsa` responder
+# and `ades::levels::add_signature_timestamp` (always available,
+# unconditional in ades-rs) to embed it.
+ades-rs = { version = "0.2", features = ["tsp"] }
+# Extracts the raw SignatureValue from the CAdES B-B CMS produced by
+# `ades::cades::sign` — RFC 3161 §2.4.1 requires the TSA's messageImprint
+# to hash exactly that (not the original document), and `ades-rs`
+# doesn't hand it back separately. Same version `ades-rs` itself pins
+# (see its Cargo.lock entry), so no duplicate major version in the tree.
+cms = "0.2"
 # Parses `<ca-dir>/<role>/cert.pem` (PEM -> DER) to hand to
 # `ades::signer::SoftSigner::from_parts`/`from_ec_parts`. Default features
 # only (no "builder": portal never constructs certificates, only reads the

@@ -1,29 +1,45 @@
-//! Core CAdES B-B signing logic, independent of Axum so it's testable
-//! without a server: load a `ca bootstrap`-issued cert+key pair from disk
-//! and sign arbitrary bytes with it via `ades-rs`.
+//! Core CAdES B-B/B-T signing logic, independent of Axum so it's
+//! testable without a server: load a `ca bootstrap`-issued cert+key pair
+//! from disk and sign arbitrary bytes with it via `ades-rs`.
 
 use std::fs;
 use std::path::Path;
 
-use ades::{cades, signer::SoftSigner, DigestAlgorithm};
+use ades::{cades, signer::SoftSigner, tsp::TspClient, DigestAlgorithm};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use p256::pkcs8::DecodePrivateKey as _;
-use serde::Serialize;
-use x509_cert::der::{DecodePem, Encode};
+use serde::{Deserialize, Serialize};
+use x509_cert::der::{Decode, DecodePem, Encode};
 
 /// Certificate roles `ca bootstrap` produces that are usable as signing
 /// identities here (`root`/`sub-ca`/`tsa`/`ocsp` are plumbing, not meant to
 /// sign arbitrary documents).
 const SIGNING_ROLES: &[&str] = &["user-p256", "user-rsa2048"];
 
+/// AdES signature level to produce. Closed set (per `CLAUDE.md`: an enum,
+/// not a trait, for closed variants) — `B-LT` isn't offered yet, it needs
+/// wiring `ocsp`'s responder in too (see `ROADMAP.md`).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SignatureLevel {
+    /// CAdES-B-B: signed, no timestamp.
+    #[serde(rename = "BB")]
+    #[default]
+    Bb,
+    /// CAdES-B-T: B-B plus a signature timestamp from a TSA
+    /// (`id-aa-signatureTimeStampToken`, ETSI EN 319 122-1 §5.2.7).
+    #[serde(rename = "BT")]
+    Bt,
+}
+
 /// Result of one [`sign`] call.
 #[derive(Serialize)]
 pub struct SignOutcome {
-    /// Base64 of the DER-encoded CMS `ContentInfo` (detached CAdES B-B).
+    /// Base64 of the DER-encoded CMS `ContentInfo` (detached CAdES).
     pub signature_der_base64: String,
     pub cert_role: String,
     pub digest_algorithm: String,
+    pub level: SignatureLevel,
 }
 
 /// Reads `<ca_dir>/<role>/{cert.pem,key.pem}` and builds the matching
@@ -58,18 +74,66 @@ fn load_signer(ca_dir: &Path, role: &str) -> Result<SoftSigner> {
 }
 
 /// Signs `data` with the identity at `<ca_dir>/<cert_role>/`, producing a
-/// detached CAdES B-B (CMS/PKCS#7) signature.
-pub fn sign(ca_dir: &Path, cert_role: &str, data: &[u8]) -> Result<SignOutcome> {
+/// detached CAdES signature at the requested `level`. `tsa_url` is only
+/// used (and only needs to point at a running `tsa serve`) for
+/// [`SignatureLevel::Bt`].
+pub fn sign(
+    ca_dir: &Path,
+    cert_role: &str,
+    data: &[u8],
+    level: SignatureLevel,
+    tsa_url: &str,
+) -> Result<SignOutcome> {
     if !SIGNING_ROLES.contains(&cert_role) {
         bail!("unsupported cert_role {cert_role:?} (expected one of {SIGNING_ROLES:?})");
     }
     let signer = load_signer(ca_dir, cert_role)?;
-    let signature_der = cades::sign(data, &signer).context("CAdES B-B signing failed")?;
+    let bb_der = cades::sign(data, &signer).context("CAdES B-B signing failed")?;
+    let signature_der = match level {
+        SignatureLevel::Bb => bb_der,
+        SignatureLevel::Bt => {
+            upgrade_to_bt(&bb_der, tsa_url).context("CAdES B-T upgrade failed")?
+        }
+    };
     Ok(SignOutcome {
         signature_der_base64: STANDARD.encode(signature_der),
         cert_role: cert_role.to_owned(),
         digest_algorithm: "Sha256".to_owned(),
+        level,
     })
+}
+
+/// Upgrades a CAdES B-B CMS to B-T: fetches a timestamp over the
+/// signature value from `tsa_url` and embeds it as an unsigned attribute.
+fn upgrade_to_bt(bb_der: &[u8], tsa_url: &str) -> Result<Vec<u8>> {
+    let signature_value = extract_signature_value(bb_der)?;
+    let hash = DigestAlgorithm::Sha256.hash(&signature_value);
+    let tst_der = TspClient::new(tsa_url)
+        .timestamp(&hash, DigestAlgorithm::Sha256)
+        .map_err(|e| anyhow::anyhow!("requesting a timestamp from {tsa_url}: {e}"))?;
+    ades::levels::add_signature_timestamp(bb_der, &tst_der)
+        .map_err(|e| anyhow::anyhow!("embedding the timestamp token: {e}"))
+}
+
+/// Extracts the raw `SignerInfo.signature` bytes from a CAdES CMS
+/// `ContentInfo` — what RFC 3161 §2.4.1 requires the TSA's
+/// `messageImprint` to hash for a signature timestamp (not the original
+/// document). `ades::cades::sign` doesn't hand this back separately, so
+/// it's re-extracted here by parsing the CMS it just produced.
+fn extract_signature_value(cms_der: &[u8]) -> Result<Vec<u8>> {
+    use cms::content_info::ContentInfo;
+    use cms::signed_data::SignedData;
+
+    let ci = ContentInfo::from_der(cms_der).context("parsing CMS ContentInfo")?;
+    let sd_der = ci.content.to_der().context("re-encoding SignedData")?;
+    let sd = SignedData::from_der(&sd_der).context("parsing SignedData")?;
+    let signer_info = sd
+        .signer_infos
+        .0
+        .as_ref()
+        .first()
+        .context("CMS has no signer infos")?;
+    Ok(signer_info.signature.as_bytes().to_vec())
 }
 
 /// The signing roles that actually have a `cert.pem` under `ca_dir`, for
@@ -90,7 +154,7 @@ mod tests {
     use p256::pkcs8::EncodePrivateKey as _;
     use rsa::rand_core::OsRng;
     use x509_cert::der::pem::LineEnding;
-    use x509_cert::der::{Decode as _, EncodePem as _};
+    use x509_cert::der::EncodePem as _;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -157,12 +221,23 @@ mod tests {
         .unwrap();
     }
 
+    // Unreachable on purpose: only `SignatureLevel::Bt` ever touches
+    // `tsa_url`, and every test below signs at `Bb`.
+    const UNUSED_TSA_URL: &str = "http://127.0.0.1:0/";
+
     #[test]
     fn signs_with_p256_identity() {
         let ca_dir = temp_dir("p256");
         write_p256_identity(&ca_dir);
 
-        let outcome = sign(&ca_dir, "user-p256", b"hello world").unwrap();
+        let outcome = sign(
+            &ca_dir,
+            "user-p256",
+            b"hello world",
+            SignatureLevel::Bb,
+            UNUSED_TSA_URL,
+        )
+        .unwrap();
         assert_eq!(outcome.cert_role, "user-p256");
         let der = STANDARD.decode(outcome.signature_der_base64).unwrap();
         assert_eq!(der[0], 0x30, "CMS ContentInfo must be a DER SEQUENCE");
@@ -175,7 +250,14 @@ mod tests {
         let ca_dir = temp_dir("rsa");
         write_rsa_identity(&ca_dir);
 
-        let outcome = sign(&ca_dir, "user-rsa2048", b"hello world").unwrap();
+        let outcome = sign(
+            &ca_dir,
+            "user-rsa2048",
+            b"hello world",
+            SignatureLevel::Bb,
+            UNUSED_TSA_URL,
+        )
+        .unwrap();
         assert_eq!(outcome.cert_role, "user-rsa2048");
         let der = STANDARD.decode(outcome.signature_der_base64).unwrap();
         assert_eq!(der[0], 0x30, "CMS ContentInfo must be a DER SEQUENCE");
@@ -186,7 +268,32 @@ mod tests {
     #[test]
     fn rejects_unknown_cert_role() {
         let ca_dir = temp_dir("unknown-role");
-        assert!(sign(&ca_dir, "root", b"data").is_err());
+        assert!(sign(&ca_dir, "root", b"data", SignatureLevel::Bb, UNUSED_TSA_URL).is_err());
+    }
+
+    #[test]
+    fn extracts_a_plausible_ecdsa_signature_value() {
+        let ca_dir = temp_dir("extract-sig-value");
+        write_p256_identity(&ca_dir);
+
+        let outcome = sign(
+            &ca_dir,
+            "user-p256",
+            b"hello world",
+            SignatureLevel::Bb,
+            UNUSED_TSA_URL,
+        )
+        .unwrap();
+        let der = STANDARD.decode(outcome.signature_der_base64).unwrap();
+        let signature_value = extract_signature_value(&der).unwrap();
+        // A DER ECDSA-Sig-Value (SEQUENCE of two ~32-byte INTEGERs) is
+        // comfortably longer than a bare 32-byte digest would be, and
+        // starts with a SEQUENCE tag — cheap signals that this is the
+        // signature bytes, not e.g. an empty or truncated value.
+        assert!(signature_value.len() > 32);
+        assert_eq!(signature_value[0], 0x30);
+
+        fs::remove_dir_all(&ca_dir).unwrap();
     }
 
     #[test]

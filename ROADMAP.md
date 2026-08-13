@@ -442,14 +442,64 @@ Fases:
       pruebas, no está en ninguna TL real. Cierra el criterio de corrección
       que fija `CLAUDE.md` para este crate. Phase 1 cerrada.
 
-### Pendiente, sin prisa (anotado, no bloquea Phase 1)
+- [x] **Phase 2** — nivel **B-T** añadido a `sign::sign` (parámetro
+      `level: SignatureLevel`, enum cerrado `Bb`/`Bt` — no un trait,
+      sigue la regla de `CLAUDE.md`) y a la UI (`assets/index.html`,
+      selector B-B/B-T). Flujo: firma B-B con `ades::cades::sign` como
+      siempre, y si el nivel es `Bt`, extrae el `SignerInfo.signature`
+      crudo del CMS resultante (`extract_signature_value`, parseando con
+      el crate `cms` directamente — RFC 3161 §2.4.1 exige que el
+      `messageImprint` del TSA sea el hash del *valor de firma*, no del
+      documento original, y `ades::cades::sign` no lo devuelve por
+      separado), pide un sello de tiempo con `ades::tsp::TspClient`
+      (feature `tsp` de `ades-rs`, activada ahora en
+      `portal/Cargo.toml`) contra `--tsa-url` (nuevo flag de `portal
+      serve`, por defecto `http://127.0.0.1:2560/`, el puerto de `tsa
+      serve`), y lo embebe con
+      `ades::levels::add_signature_timestamp` (ya en `ades-rs`, sin
+      condicionar a ninguna feature). 1 test unitario nuevo sin red
+      (`extracts_a_plausible_ecdsa_signature_value`); los 4 tests
+      existentes actualizados a la nueva firma de `sign()`.
+
+      **No se automatizó un test de integración B-T** (a diferencia de
+      `tsa`/`ocsp`, que sí levantan su propio servidor dentro del test):
+      haría falta orquestar dos servidores de crates distintos
+      (`tsa`+`portal`) desde los tests de uno solo, con el riesgo de
+      puertos/arranque que eso implica para poco beneficio extra sobre
+      la verificación manual real de abajo — mismo criterio de "no
+      sobre-testear" que ya aplica en otros puntos del repo.
+
+      **Verificado manualmente** (2026-08-13): `cargo run -p tsa --
+      serve` + `cargo run -p portal -- serve` (con el `--tsa-url` por
+      defecto) + `POST /api/sign` con `"level":"BT"` produce un CMS
+      notablemente mayor que el B-B (incluye el `TimeStampToken`
+      completo). Comprobado en tres pasos independientes: (1)
+      `openssl cms -verify` sobre la firma B-T sigue dando `CMS
+      Verification successful` (la firma base no se rompe al añadir el
+      atributo no firmado); (2) inspección con `asn1crypto` confirma que
+      el atributo `id-aa-signatureTimeStampToken` está presente en
+      `unsignedAttrs`; (3) extraído el token embebido y verificado *por
+      separado* con `openssl ts -verify -token_in -digest
+      <sha256(SignatureValue)> -CAfile (root+sub-ca) -untrusted
+      (tsa+sub-ca)` → `Verification: OK` — confirma que el TSA firmó
+      exactamente el hash del valor de firma, no otra cosa. Phase 2
+      cerrada.
+
+### Pendiente, sin prisa (anotado, no bloquea Phase 2)
 
 - Verificación integrada en el propio `portal` (subir firma + original y
   comprobar in situ), en vez de depender de `openssl`/DSS externos.
-- PAdES/XAdES/JAdES, y niveles B-T/B-LT — `tsa`/`ocsp` ya existen y están
-  verificados (ver más abajo), pero `portal` todavía no activa las
-  features `tsp`/`ocsp` de `ades-rs` ni ofrece esos niveles en su UI;
-  sigue anotado como siguiente sprint natural, no hecho todavía.
+- **Nivel B-LT** — `ocsp` ya existe y está verificado (ver su propia
+  sección), pero `portal` todavía no activa la feature `ocsp` de
+  `ades-rs` ni llama a `ades::levels::add_revocation_values`; necesita
+  además desenvolver el `BasicOCSPResponse` de dentro del
+  `OCSPResponse` completo que devuelve `ades::ocsp::OcspClient::
+  raw_response` (esa función devuelve el sobre entero, no solo el
+  `responseBytes.response` que `add_revocation_values` espera) — un
+  poco más de trabajo que B-T, aplazado a propósito para no mezclarlo
+  en el mismo cambio.
+- PAdES/XAdES/JAdES, y el nivel B-LTA — `ades-rs` 0.2.0 ni siquiera
+  implementa B-LTA todavía (ver sección `tsa`/`ocsp` más abajo).
 - Más identidades de firma además de `user-p256`/`user-rsa2048`, si
   `ca` acaba añadiendo `ca issue-user` (ver pendientes de `ca` arriba).
 
@@ -546,11 +596,11 @@ Fases:
 
 ### Pendiente
 
-- **Activar `tsp`/`ocsp` en `crates/portal/Cargo.toml` y añadir niveles
-  B-T/B-LT a `portal serve`** — el paso natural siguiente ahora que los
-  responders existen y están verificados; no hecho en este sprint a
-  propósito, para no mezclar "los responders funcionan" con "portal los
-  usa" en una misma verificación.
+- **B-T resuelto** (2026-08-13): `portal` ya activa la feature `tsp` de
+  `ades-rs` y ofrece nivel B-T en su UI/API — ver Phase 2 de `portal`
+  arriba. Sigue pendiente **B-LT** (activar la feature `ocsp`, desenvolver
+  el `BasicOCSPResponse` de la respuesta de `OcspClient`, ver el
+  pendiente correspondiente en la sección de `portal`).
 - **`docker compose build tsa ocsp && docker compose up tsa ocsp` sin
   verificar** — Docker no estaba disponible en el entorno donde se
   implementó esto (sin integración WSL de Docker Desktop). Los

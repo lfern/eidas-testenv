@@ -123,14 +123,18 @@ legal — ver aviso arriba). `./data/` está en `.gitignore`.
 
 ```bash
 # UI web local (127.0.0.1 únicamente): sube un archivo, elige un cert de
-# `ca bootstrap` (user-p256 / user-rsa2048), firma en CAdES B-B
+# `ca bootstrap` (user-p256 / user-rsa2048) y un nivel (B-B / B-T)
 cargo run -p portal -- serve --port 8090 --ca-dir ./data/ca
 ```
 
 Firma **detached** (el archivo original no queda embebido en la firma —
 hace falta guardarlo aparte para verificar después). Requiere haber
 ejecutado antes `ca bootstrap` (u otro `--ca-dir` con la misma estructura
-`<role>/{cert.pem,key.pem}`).
+`<role>/{cert.pem,key.pem}`). El nivel **B-T** (con sello de tiempo)
+requiere además tener `tsa serve` corriendo — por defecto `portal`
+espera encontrarlo en `http://127.0.0.1:2560/` (`--tsa-url` para
+cambiarlo). B-LT (con prueba de no-revocación) todavía no está
+disponible — ver `ROADMAP.md`.
 
 ```bash
 # Verificación local sin depender del DSS de la CE

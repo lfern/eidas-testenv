@@ -48,13 +48,19 @@
   <h1>eidas-testenv — portal</h1>
   <p>UI local (solo <code>127.0.0.1</code>) para firmar un archivo con uno de
   los certificados que genera <code>ca bootstrap</code>. Produce una firma
-  CAdES B-B (CMS/PKCS#7) <em>detached</em> — guarda también el archivo
-  original, hace falta para verificar la firma después.</p>
+  CAdES (CMS/PKCS#7) <em>detached</em> — guarda también el archivo
+  original, hace falta para verificar la firma después. El nivel B-T
+  añade un sello de tiempo y requiere tener <code>tsa serve</code>
+  corriendo.</p>
 
   <section id="sign-section">
-    <h2>Firmar (CAdES B-B)</h2>
+    <h2>Firmar (CAdES)</h2>
     <input type="file" id="sign-file" />
     <select id="sign-cert-role"></select>
+    <select id="sign-level">
+      <option value="BB">B-B (firmado, sin sello de tiempo)</option>
+      <option value="BT">B-T (con sello de tiempo — requiere `tsa serve`)</option>
+    </select>
     <button id="sign-submit" disabled>Firmar</button>
     <div class="result" id="sign-result"></div>
     <a id="sign-download" class="hidden" download="signature.p7s">Descargar firma (.p7s)</a>
@@ -95,6 +101,7 @@
 
   const fileInput = document.getElementById("sign-file");
   const certRoleSelect = document.getElementById("sign-cert-role");
+  const levelSelect = document.getElementById("sign-level");
   const submitButton = document.getElementById("sign-submit");
   const resultEl = document.getElementById("sign-result");
   const downloadLink = document.getElementById("sign-download");
@@ -135,10 +142,11 @@
       const outcome = await postJson("/api/sign", {
         cert_role: certRoleSelect.value,
         data_base64: dataBase64,
+        level: levelSelect.value,
       });
       showResult(
         resultEl,
-        `Firmado con ${outcome.cert_role} (${outcome.digest_algorithm}).`,
+        `Firmado con ${outcome.cert_role} (${outcome.digest_algorithm}), nivel ${outcome.level}.`,
         false
       );
       const blob = base64ToBlob(outcome.signature_der_base64);
