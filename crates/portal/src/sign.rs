@@ -1,13 +1,20 @@
-//! Core CAdES B-B/B-T signing logic, independent of Axum so it's
+//! Core CAdES B-B/B-T/B-LT signing logic, independent of Axum so it's
 //! testable without a server: load a `ca bootstrap`-issued cert+key pair
 //! from disk and sign arbitrary bytes with it via `ades-rs`.
 
 use std::fs;
 use std::path::Path;
 
-use ades::{cades, signer::SoftSigner, tsp::TspClient, DigestAlgorithm};
+use ades::{
+    cades,
+    ocsp::OcspClient,
+    signer::{Signer as _, SoftSigner},
+    tsp::TspClient,
+    DigestAlgorithm,
+};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use der::FixedTag as _;
 use p256::pkcs8::DecodePrivateKey as _;
 use serde::{Deserialize, Serialize};
 use x509_cert::der::{Decode, DecodePem, Encode};
@@ -18,8 +25,7 @@ use x509_cert::der::{Decode, DecodePem, Encode};
 const SIGNING_ROLES: &[&str] = &["user-p256", "user-rsa2048"];
 
 /// AdES signature level to produce. Closed set (per `CLAUDE.md`: an enum,
-/// not a trait, for closed variants) — `B-LT` isn't offered yet, it needs
-/// wiring `ocsp`'s responder in too (see `ROADMAP.md`).
+/// not a trait, for closed variants).
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SignatureLevel {
     /// CAdES-B-B: signed, no timestamp.
@@ -30,6 +36,13 @@ pub enum SignatureLevel {
     /// (`id-aa-signatureTimeStampToken`, ETSI EN 319 122-1 §5.2.7).
     #[serde(rename = "BT")]
     Bt,
+    /// CAdES-B-LT: B-T plus revocation data proving the signing
+    /// certificate wasn't revoked (`id-aa-ets-revocationValues`, ETSI
+    /// EN 319 122-1 §5.2.8) — built on top of B-T, not directly on B-B,
+    /// so the embedded timestamp establishes the time the revocation
+    /// data is checked against.
+    #[serde(rename = "BLT")]
+    Blt,
 }
 
 /// Result of one [`sign`] call.
@@ -74,15 +87,16 @@ fn load_signer(ca_dir: &Path, role: &str) -> Result<SoftSigner> {
 }
 
 /// Signs `data` with the identity at `<ca_dir>/<cert_role>/`, producing a
-/// detached CAdES signature at the requested `level`. `tsa_url` is only
-/// used (and only needs to point at a running `tsa serve`) for
-/// [`SignatureLevel::Bt`].
+/// detached CAdES signature at the requested `level`. `tsa_url`/`ocsp_url`
+/// are only contacted for [`SignatureLevel::Bt`]/[`SignatureLevel::Blt`]
+/// respectively (expected to point at a running `tsa serve`/`ocsp serve`).
 pub fn sign(
     ca_dir: &Path,
     cert_role: &str,
     data: &[u8],
     level: SignatureLevel,
     tsa_url: &str,
+    ocsp_url: &str,
 ) -> Result<SignOutcome> {
     if !SIGNING_ROLES.contains(&cert_role) {
         bail!("unsupported cert_role {cert_role:?} (expected one of {SIGNING_ROLES:?})");
@@ -93,6 +107,11 @@ pub fn sign(
         SignatureLevel::Bb => bb_der,
         SignatureLevel::Bt => {
             upgrade_to_bt(&bb_der, tsa_url).context("CAdES B-T upgrade failed")?
+        }
+        SignatureLevel::Blt => {
+            let bt_der = upgrade_to_bt(&bb_der, tsa_url).context("CAdES B-T upgrade failed")?;
+            upgrade_to_blt(&bt_der, &signer, ca_dir, ocsp_url)
+                .context("CAdES B-LT upgrade failed")?
         }
     };
     Ok(SignOutcome {
@@ -136,6 +155,103 @@ fn extract_signature_value(cms_der: &[u8]) -> Result<Vec<u8>> {
     Ok(signer_info.signature.as_bytes().to_vec())
 }
 
+/// Upgrades a CAdES B-T CMS to B-LT: queries the `ocsp` responder for the
+/// status of `signer`'s own certificate (issued by `sub-ca`, same as
+/// every signing identity `ca bootstrap` produces) and embeds the
+/// resulting `BasicOCSPResponse` as revocation data.
+fn upgrade_to_blt(
+    bt_der: &[u8],
+    signer: &SoftSigner,
+    ca_dir: &Path,
+    ocsp_url: &str,
+) -> Result<Vec<u8>> {
+    let issuer_pem = fs::read_to_string(ca_dir.join("sub-ca").join("cert.pem"))
+        .context("reading sub-ca/cert.pem (the issuer of every signing identity)")?;
+    let issuer_der = x509_cert::Certificate::from_pem(issuer_pem.as_bytes())
+        .context("parsing sub-ca/cert.pem")?
+        .to_der()
+        .context("re-encoding sub-ca/cert.pem as DER")?;
+    let issuer = ades::Certificate::from_der(&issuer_der).context("building issuer Certificate")?;
+
+    let envelope_der = OcspClient::with_url(ocsp_url)
+        .raw_response(signer.certificate(), &issuer)
+        .map_err(|e| anyhow::anyhow!("querying the OCSP responder at {ocsp_url}: {e}"))?;
+    let basic_response_der = extract_basic_ocsp_response(&envelope_der)?;
+
+    ades::levels::add_revocation_values(bt_der, &basic_response_der)
+        .map_err(|e| anyhow::anyhow!("embedding revocation values: {e}"))
+}
+
+/// `der` 0.7.10 has no built-in `ENUMERATED` type — same gap `crates/ocsp`
+/// hit and worked around the same way (`impl DecodeValue/EncodeValue/
+/// FixedTag` by hand, mirroring `der`'s own `impl ... for bool`).
+struct OcspEnumeratedStatus(u8);
+
+impl<'a> der::DecodeValue<'a> for OcspEnumeratedStatus {
+    fn decode_value<R: der::Reader<'a>>(reader: &mut R, header: der::Header) -> der::Result<Self> {
+        if header.length != der::Length::ONE {
+            return Err(reader.error(der::ErrorKind::Length { tag: Self::TAG }));
+        }
+        Ok(OcspEnumeratedStatus(reader.read_byte()?))
+    }
+}
+
+impl der::EncodeValue for OcspEnumeratedStatus {
+    fn value_len(&self) -> der::Result<der::Length> {
+        Ok(der::Length::ONE)
+    }
+
+    fn encode_value(&self, writer: &mut impl der::Writer) -> der::Result<()> {
+        writer.write_byte(self.0)
+    }
+}
+
+impl der::FixedTag for OcspEnumeratedStatus {
+    const TAG: der::Tag = der::Tag::Enumerated;
+}
+
+/// `ResponseBytes ::= SEQUENCE { responseType OBJECT IDENTIFIER, response OCTET STRING }`
+/// (RFC 6960 §4.2.1).
+#[derive(der::Sequence)]
+struct OcspResponseBytes {
+    response_type: der::asn1::ObjectIdentifier,
+    response: der::asn1::OctetString,
+}
+
+/// `OCSPResponse ::= SEQUENCE { responseStatus OCSPResponseStatus, responseBytes [0]
+/// EXPLICIT ResponseBytes OPTIONAL }` (RFC 6960 §4.2.1) — the envelope
+/// `ades::ocsp::OcspClient::raw_response` returns as-is.
+#[derive(der::Sequence)]
+struct OcspResponseEnvelope {
+    response_status: OcspEnumeratedStatus,
+    #[asn1(
+        context_specific = "0",
+        tag_mode = "EXPLICIT",
+        constructed = "true",
+        optional = "true"
+    )]
+    response_bytes: Option<OcspResponseBytes>,
+}
+
+/// Unwraps an `OCSPResponse` envelope down to the `BasicOCSPResponse` DER
+/// bytes inside its `responseBytes.response` OCTET STRING —
+/// `ades::levels::add_revocation_values` wants only those, not the
+/// envelope `OcspClient::raw_response` actually returns.
+fn extract_basic_ocsp_response(envelope_der: &[u8]) -> Result<Vec<u8>> {
+    let envelope =
+        OcspResponseEnvelope::from_der(envelope_der).context("parsing OCSPResponse envelope")?;
+    if envelope.response_status.0 != 0 {
+        bail!(
+            "OCSP responder returned a non-successful status ({})",
+            envelope.response_status.0
+        );
+    }
+    let bytes = envelope
+        .response_bytes
+        .context("OCSPResponse has no responseBytes")?;
+    Ok(bytes.response.as_bytes().to_vec())
+}
+
 /// The signing roles that actually have a `cert.pem` under `ca_dir`, for
 /// the UI to only offer certs that exist.
 pub fn available_cert_roles(ca_dir: &Path) -> Vec<String> {
@@ -150,7 +266,6 @@ pub fn available_cert_roles(ca_dir: &Path) -> Vec<String> {
 mod tests {
     use super::*;
 
-    use ades::signer::Signer as _;
     use p256::pkcs8::EncodePrivateKey as _;
     use rsa::rand_core::OsRng;
     use x509_cert::der::pem::LineEnding;
@@ -221,9 +336,10 @@ mod tests {
         .unwrap();
     }
 
-    // Unreachable on purpose: only `SignatureLevel::Bt` ever touches
-    // `tsa_url`, and every test below signs at `Bb`.
+    // Unreachable on purpose: only `Bt`/`Blt` ever touch `tsa_url`/
+    // `ocsp_url`, and every test below signs at `Bb`.
     const UNUSED_TSA_URL: &str = "http://127.0.0.1:0/";
+    const UNUSED_OCSP_URL: &str = "http://127.0.0.1:0/";
 
     #[test]
     fn signs_with_p256_identity() {
@@ -236,6 +352,7 @@ mod tests {
             b"hello world",
             SignatureLevel::Bb,
             UNUSED_TSA_URL,
+            UNUSED_OCSP_URL,
         )
         .unwrap();
         assert_eq!(outcome.cert_role, "user-p256");
@@ -256,6 +373,7 @@ mod tests {
             b"hello world",
             SignatureLevel::Bb,
             UNUSED_TSA_URL,
+            UNUSED_OCSP_URL,
         )
         .unwrap();
         assert_eq!(outcome.cert_role, "user-rsa2048");
@@ -268,7 +386,15 @@ mod tests {
     #[test]
     fn rejects_unknown_cert_role() {
         let ca_dir = temp_dir("unknown-role");
-        assert!(sign(&ca_dir, "root", b"data", SignatureLevel::Bb, UNUSED_TSA_URL).is_err());
+        assert!(sign(
+            &ca_dir,
+            "root",
+            b"data",
+            SignatureLevel::Bb,
+            UNUSED_TSA_URL,
+            UNUSED_OCSP_URL
+        )
+        .is_err());
     }
 
     #[test]
@@ -282,6 +408,7 @@ mod tests {
             b"hello world",
             SignatureLevel::Bb,
             UNUSED_TSA_URL,
+            UNUSED_OCSP_URL,
         )
         .unwrap();
         let der = STANDARD.decode(outcome.signature_der_base64).unwrap();
@@ -294,6 +421,37 @@ mod tests {
         assert_eq!(signature_value[0], 0x30);
 
         fs::remove_dir_all(&ca_dir).unwrap();
+    }
+
+    #[test]
+    fn extracts_the_basic_response_from_an_ocsp_envelope() {
+        // Builds a minimal but well-formed OCSPResponse envelope
+        // (RFC 6960 §4.2.1) by hand, the same shape `crates/ocsp`
+        // produces for real, to check the unwrap logic without needing
+        // a running responder.
+        let basic_response_der = b"pretend-this-is-a-BasicOCSPResponse".to_vec();
+        let envelope = OcspResponseEnvelope {
+            response_status: OcspEnumeratedStatus(0),
+            response_bytes: Some(OcspResponseBytes {
+                response_type: der::asn1::ObjectIdentifier::new("1.3.6.1.5.5.7.48.1.1").unwrap(),
+                response: der::asn1::OctetString::new(basic_response_der.clone()).unwrap(),
+            }),
+        };
+        let envelope_der = envelope.to_der().unwrap();
+
+        let extracted = extract_basic_ocsp_response(&envelope_der).unwrap();
+        assert_eq!(extracted, basic_response_der);
+    }
+
+    #[test]
+    fn rejects_a_non_successful_ocsp_envelope() {
+        let envelope = OcspResponseEnvelope {
+            response_status: OcspEnumeratedStatus(1), // malformedRequest
+            response_bytes: None,
+        };
+        let envelope_der = envelope.to_der().unwrap();
+
+        assert!(extract_basic_ocsp_response(&envelope_der).is_err());
     }
 
     #[test]

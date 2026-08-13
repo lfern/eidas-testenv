@@ -123,7 +123,7 @@ legal — ver aviso arriba). `./data/` está en `.gitignore`.
 
 ```bash
 # UI web local (127.0.0.1 únicamente): sube un archivo, elige un cert de
-# `ca bootstrap` (user-p256 / user-rsa2048) y un nivel (B-B / B-T)
+# `ca bootstrap` (user-p256 / user-rsa2048) y un nivel (B-B / B-T / B-LT)
 cargo run -p portal -- serve --port 8090 --ca-dir ./data/ca
 ```
 
@@ -131,10 +131,10 @@ Firma **detached** (el archivo original no queda embebido en la firma —
 hace falta guardarlo aparte para verificar después). Requiere haber
 ejecutado antes `ca bootstrap` (u otro `--ca-dir` con la misma estructura
 `<role>/{cert.pem,key.pem}`). El nivel **B-T** (con sello de tiempo)
-requiere además tener `tsa serve` corriendo — por defecto `portal`
-espera encontrarlo en `http://127.0.0.1:2560/` (`--tsa-url` para
-cambiarlo). B-LT (con prueba de no-revocación) todavía no está
-disponible — ver `ROADMAP.md`.
+requiere tener `tsa serve` corriendo — por defecto `portal` lo busca en
+`http://127.0.0.1:2560/` (`--tsa-url` para cambiarlo). **B-LT** (con
+prueba de no-revocación, construido sobre B-T) requiere además `ocsp
+serve` — por defecto `http://127.0.0.1:2561/` (`--ocsp-url`).
 
 ```bash
 # Verificación local sin depender del DSS de la CE
@@ -183,9 +183,8 @@ este paso se hace a mano, en el navegador.
 
 Responder RFC 3161 (timestamp authority) y responder RFC 6960 (OCSP),
 firmando con las identidades `tsa`/`ocsp` que `ca bootstrap` ya genera.
-`portal` todavía no los usa (eso es B-T/B-LT, el siguiente sprint
-natural — ver `ROADMAP.md`); por ahora se pueden probar de forma
-independiente:
+`portal` ya los usa para los niveles B-T/B-LT (ver arriba); también se
+pueden probar de forma independiente:
 
 ```bash
 # Requiere haber ejecutado antes `ca bootstrap`

@@ -49,9 +49,9 @@
   <p>UI local (solo <code>127.0.0.1</code>) para firmar un archivo con uno de
   los certificados que genera <code>ca bootstrap</code>. Produce una firma
   CAdES (CMS/PKCS#7) <em>detached</em> — guarda también el archivo
-  original, hace falta para verificar la firma después. El nivel B-T
-  añade un sello de tiempo y requiere tener <code>tsa serve</code>
-  corriendo.</p>
+  original, hace falta para verificar la firma después. B-T añade un
+  sello de tiempo (requiere <code>tsa serve</code>); B-LT añade además
+  prueba de no-revocación (requiere también <code>ocsp serve</code>).</p>
 
   <section id="sign-section">
     <h2>Firmar (CAdES)</h2>
@@ -60,6 +60,7 @@
     <select id="sign-level">
       <option value="BB">B-B (firmado, sin sello de tiempo)</option>
       <option value="BT">B-T (con sello de tiempo — requiere `tsa serve`)</option>
+      <option value="BLT">B-LT (con prueba de no-revocación — requiere `tsa serve` + `ocsp serve`)</option>
     </select>
     <button id="sign-submit" disabled>Firmar</button>
     <div class="result" id="sign-result"></div>

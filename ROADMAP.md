@@ -485,19 +485,73 @@ Fases:
       exactamente el hash del valor de firma, no otra cosa. Phase 2
       cerrada.
 
-### Pendiente, sin prisa (anotado, no bloquea Phase 2)
+- [x] **Phase 3** — nivel **B-LT** añadido (variante `Blt` en
+      `SignatureLevel`, construida **sobre B-T**, no directamente sobre
+      B-B — el sello de tiempo ya embebido fija el instante contra el
+      que tiene sentido comprobar la revocación). Flujo:
+      `upgrade_to_blt` carga `sub-ca/cert.pem` (el emisor de toda
+      identidad de firma), pide el estado con
+      `ades::ocsp::OcspClient::with_url(ocsp_url).raw_response(signer
+      .certificate(), &issuer)` (feature `ocsp` de `ades-rs`, activada
+      ahora en `portal/Cargo.toml` junto a `tsp`), y llama a
+      `ades::levels::add_revocation_values`. Nuevo flag `--ocsp-url`
+      en `portal serve` (por defecto `http://127.0.0.1:2561/`, el
+      puerto de `ocsp serve`).
+
+      **`OcspClient::raw_response` devuelve el sobre `OCSPResponse`
+      completo, no el `BasicOCSPResponse` que `add_revocation_values`
+      espera** (confirmado leyendo ambas funciones en
+      `ades-rs-0.2.0/src/ocsp/client.rs` y `.../src/levels.rs`) —
+      `extract_basic_ocsp_response` en `sign.rs` lo desenvuelve a mano:
+      mismo problema de "no hay tipo `Enumerated` en `der` 0.7.10" que
+      ya resolvió `crates/ocsp` (mismo `impl DecodeValue/EncodeValue/
+      FixedTag` duplicado aquí, tercera vez que aparece este patrón en
+      el repo). 2 tests unitarios nuevos sin red
+      (`extracts_the_basic_response_from_an_ocsp_envelope`,
+      `rejects_a_non_successful_ocsp_envelope`).
+
+      **Hallazgo real en `ades-rs` 0.2.0, no en este repo**: descubierto
+      al verificar manualmente (ver abajo) — `add_revocation_values`
+      envuelve el `BasicOCSPResponse` en un `SEQUENCE` (0x30) de más
+      antes de meterlo en el "`SEQUENCE OF`" de `ocspValues`
+      (`RevocationValues.ocspValues ::= [1] SEQUENCE OF
+      BasicOCSPResponse`, RFC 5126/ETSI TS 101 733 — cada elemento debe
+      ser un `BasicOCSPResponse` directamente, no un `SEQUENCE` que lo
+      contenga). Los datos siguen siendo recuperables sabiendo del nivel
+      extra (confirmado abajo), pero un validador estricto que siga la
+      gramática ASN.1 al pie de la letra podría rechazar el campo. No es
+      nada que se pueda arreglar desde este repo (es un bug de la
+      dependencia externa `ades-rs`, no de `portal`) — anotado por si en
+      algún momento compensa reportarlo río arriba.
+
+      **Verificado manualmente** (2026-08-13): `cargo run -p tsa --
+      serve` + `cargo run -p ocsp -- serve` + `cargo run -p portal --
+      serve` + `POST /api/sign` con `"level":"BLT"` produce un CMS aún
+      mayor que el B-T (incluye también las revocation values).
+      Comprobado en varios pasos: (1) `openssl cms -verify` sigue dando
+      `CMS Verification successful`; (2) `asn1crypto` confirma que
+      **ambos** atributos no firmados están presentes
+      (`id-aa-signatureTimeStampToken` e
+      `id-aa-ets-revocationValues`); (3) extraído a mano el
+      `BasicOCSPResponse` embebido (dando cuenta del nivel de `SEQUENCE`
+      extra de arriba) y verificado de forma completamente independiente
+      con Python (`asn1crypto` + `cryptography`): `responderID` coincide
+      con el subject del propio cert `ocsp`, `certStatus` es `good`, el
+      número de serie del `CertID` coincide exactamente (en decimal) con
+      el serial real del certificado `user-p256` usado para firmar, y la
+      firma ECDSA sobre `tbsResponseData` verifica con la clave pública
+      del cert `ocsp` (`pubkey.verify(...)` sin excepción). Phase 3
+      cerrada.
+
+### Pendiente, sin prisa (anotado, no bloquea Phase 3)
 
 - Verificación integrada en el propio `portal` (subir firma + original y
   comprobar in situ), en vez de depender de `openssl`/DSS externos.
-- **Nivel B-LT** — `ocsp` ya existe y está verificado (ver su propia
-  sección), pero `portal` todavía no activa la feature `ocsp` de
-  `ades-rs` ni llama a `ades::levels::add_revocation_values`; necesita
-  además desenvolver el `BasicOCSPResponse` de dentro del
-  `OCSPResponse` completo que devuelve `ades::ocsp::OcspClient::
-  raw_response` (esa función devuelve el sobre entero, no solo el
-  `responseBytes.response` que `add_revocation_values` espera) — un
-  poco más de trabajo que B-T, aplazado a propósito para no mezclarlo
-  en el mismo cambio.
+- Validar una firma B-T/B-LT real contra el DSS de la CE
+  (https://dss.nowina.lu/validation, mismo criterio que ya se usó para
+  B-B) — no se ha hecho todavía para estos dos niveles nuevos; el
+  hallazgo del `SEQUENCE` extra en `add_revocation_values` hace que esto
+  sea especialmente interesante para B-LT en concreto.
 - PAdES/XAdES/JAdES, y el nivel B-LTA — `ades-rs` 0.2.0 ni siquiera
   implementa B-LTA todavía (ver sección `tsa`/`ocsp` más abajo).
 - Más identidades de firma además de `user-p256`/`user-rsa2048`, si
@@ -596,11 +650,11 @@ Fases:
 
 ### Pendiente
 
-- **B-T resuelto** (2026-08-13): `portal` ya activa la feature `tsp` de
-  `ades-rs` y ofrece nivel B-T en su UI/API — ver Phase 2 de `portal`
-  arriba. Sigue pendiente **B-LT** (activar la feature `ocsp`, desenvolver
-  el `BasicOCSPResponse` de la respuesta de `OcspClient`, ver el
-  pendiente correspondiente en la sección de `portal`).
+- **B-T y B-LT resueltos** (2026-08-13): `portal` ya activa las features
+  `tsp`/`ocsp` de `ades-rs` y ofrece ambos niveles en su UI/API — ver
+  Phases 2 y 3 de `portal` arriba (la de B-LT documenta además un
+  hallazgo real en `ades-rs` 0.2.0, un `SEQUENCE` de más en
+  `add_revocation_values`).
 - **`docker compose build tsa ocsp && docker compose up tsa ocsp` sin
   verificar** — Docker no estaba disponible en el entorno donde se
   implementó esto (sin integración WSL de Docker Desktop). Los

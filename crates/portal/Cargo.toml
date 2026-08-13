@@ -12,18 +12,26 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 
-# CAdES B-B/B-T signing over the identities `ca bootstrap` already
-# produces. Default features (cades/pades/soft) plus "tsp": B-T needs
-# `ades::tsp::TspClient` to fetch a timestamp from the `tsa` responder
-# and `ades::levels::add_signature_timestamp` (always available,
-# unconditional in ades-rs) to embed it.
-ades-rs = { version = "0.2", features = ["tsp"] }
+# CAdES B-B/B-T/B-LT signing over the identities `ca bootstrap` already
+# produces. Default features (cades/pades/soft) plus "tsp" (B-T:
+# `ades::tsp::TspClient`, fetches a timestamp from the `tsa` responder)
+# and "ocsp" (B-LT: `ades::ocsp::OcspClient`, fetches revocation data
+# from the `ocsp` responder). `ades::levels::add_signature_timestamp`/
+# `add_revocation_values` that embed both are always available,
+# unconditional in ades-rs.
+ades-rs = { version = "0.2", features = ["tsp", "ocsp"] }
 # Extracts the raw SignatureValue from the CAdES B-B CMS produced by
 # `ades::cades::sign` — RFC 3161 §2.4.1 requires the TSA's messageImprint
 # to hash exactly that (not the original document), and `ades-rs`
 # doesn't hand it back separately. Same version `ades-rs` itself pins
 # (see its Cargo.lock entry), so no duplicate major version in the tree.
 cms = "0.2"
+# Unwraps the `BasicOCSPResponse` from inside the `OCSPResponse` envelope
+# `ades::ocsp::OcspClient::raw_response` returns —
+# `ades::levels::add_revocation_values` wants only the inner bytes, not
+# the envelope. Same version already resolved elsewhere in the workspace
+# (`tsa`/`ocsp` crates), no duplicate major version in the tree.
+der = { version = "0.7", features = ["derive", "alloc"] }
 # Parses `<ca-dir>/<role>/cert.pem` (PEM -> DER) to hand to
 # `ades::signer::SoftSigner::from_parts`/`from_ec_parts`. Default features
 # only (no "builder": portal never constructs certificates, only reads the

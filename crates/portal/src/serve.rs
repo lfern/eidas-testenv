@@ -1,5 +1,5 @@
 //! Local browser UI for `portal serve`: an axum HTTP server exposing the
-//! CAdES B-B/B-T signing flow — pick one of the certs `ca bootstrap`
+//! CAdES B-B/B-T/B-LT signing flow — pick one of the certs `ca bootstrap`
 //! produced, upload a file, download the resulting detached signature.
 
 use std::net::SocketAddr;
@@ -41,6 +41,7 @@ impl<E: Into<anyhow::Error>> From<E> for ApiError {
 struct AppState {
     ca_dir: PathBuf,
     tsa_url: String,
+    ocsp_url: String,
 }
 
 async fn index() -> Html<&'static str> {
@@ -72,15 +73,26 @@ async fn api_sign(
         &data,
         req.level,
         &state.tsa_url,
+        &state.ocsp_url,
     )?))
 }
 
 /// Starts the local browser UI on `127.0.0.1:<port>` — never `0.0.0.0`,
 /// since this tool reads private signing keys from `<ca_dir>/*/key.pem`
-/// and must never be LAN-reachable. `tsa_url` is only contacted for
-/// `SignatureLevel::Bt` requests (expected to be a running `tsa serve`).
-pub async fn run(port: u16, ca_dir: PathBuf, tsa_url: String) -> anyhow::Result<()> {
-    let state = AppState { ca_dir, tsa_url };
+/// and must never be LAN-reachable. `tsa_url`/`ocsp_url` are only
+/// contacted for `SignatureLevel::Bt`/`SignatureLevel::Blt` requests
+/// (expected to be a running `tsa serve`/`ocsp serve`).
+pub async fn run(
+    port: u16,
+    ca_dir: PathBuf,
+    tsa_url: String,
+    ocsp_url: String,
+) -> anyhow::Result<()> {
+    let state = AppState {
+        ca_dir,
+        tsa_url,
+        ocsp_url,
+    };
     let app = Router::new()
         .route("/", get(index))
         .route("/api/certs", get(api_certs))

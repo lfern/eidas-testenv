@@ -3462,6 +3462,7 @@ dependencies = [
  "base64 0.22.1",
  "clap",
  "cms",
+ "der 0.7.10",
  "p256",
  "rsa 0.9.10",
  "serde",
