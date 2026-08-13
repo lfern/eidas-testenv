@@ -543,15 +543,40 @@ Fases:
       del cert `ocsp` (`pubkey.verify(...)` sin excepción). Phase 3
       cerrada.
 
+      **Validado contra el DSS de la CE** (2026-08-13,
+      https://dss.nowina.lu/validation): subidas por separado la firma
+      B-T (`signature-bt.p7s`) y la B-LT (`signature-blt.p7s`), cada una
+      con su documento original.
+
+      - **B-T**: `Signature format: CAdES-BASELINE-T` reconocido
+        correctamente, con su propia sección "Timestamps" mostrando el
+        sello de tiempo del TSA. `INDETERMINATE`/`NO_CERTIFICATE_CHAIN_
+        FOUND` tanto para la cadena del firmante como para la del propio
+        TSA — esperado, misma razón que B-B (CA de pruebas, no en
+        ninguna TL real). **Nivel confirmado interoperable.**
+      - **B-LT**: el DSS reporta `Signature format: CAdES-BASELINE-T`
+        **también**, no `CAdES-BASELINE-LT` — no hay ninguna sección de
+        datos de revocación en el informe. Esto **confirma en la
+        práctica** el hallazgo de arriba: el `SEQUENCE` de más que
+        `ades-rs` mete en `add_revocation_values` no es solo una
+        desviación teórica de la gramática ASN.1 de RFC 5126 — rompe la
+        interoperabilidad real con un validador que sigue el estándar al
+        pie de la letra. `portal` genera correctamente los bytes de
+        revocación (verificado a mano con Python, ver arriba), pero el
+        envoltorio que produce la dependencia externa `ades-rs` no es el
+        que un validador conforme espera encontrar. **B-LT no es
+        utilizable de cara a un verificador real hasta que se corrija en
+        `ades-rs`** — no hay nada que arreglar desde este repo, es un bug
+        río arriba.
+
 ### Pendiente, sin prisa (anotado, no bloquea Phase 3)
 
 - Verificación integrada en el propio `portal` (subir firma + original y
   comprobar in situ), en vez de depender de `openssl`/DSS externos.
-- Validar una firma B-T/B-LT real contra el DSS de la CE
-  (https://dss.nowina.lu/validation, mismo criterio que ya se usó para
-  B-B) — no se ha hecho todavía para estos dos niveles nuevos; el
-  hallazgo del `SEQUENCE` extra en `add_revocation_values` hace que esto
-  sea especialmente interesante para B-LT en concreto.
+- **Reportar el bug de `add_revocation_values` río arriba en `ades-rs`**
+  (o forkear/parchear temporalmente si se necesita B-LT de verdad antes
+  de que se corrija upstream) — confirmado con el DSS que rompe
+  interoperabilidad real, no es solo una curiosidad de ASN.1.
 - PAdES/XAdES/JAdES, y el nivel B-LTA — `ades-rs` 0.2.0 ni siquiera
   implementa B-LTA todavía (ver sección `tsa`/`ocsp` más abajo).
 - Más identidades de firma además de `user-p256`/`user-rsa2048`, si

@@ -136,6 +136,13 @@ requiere tener `tsa serve` corriendo — por defecto `portal` lo busca en
 prueba de no-revocación, construido sobre B-T) requiere además `ocsp
 serve` — por defecto `http://127.0.0.1:2561/` (`--ocsp-url`).
 
+> ⚠️ **B-LT no interopera todavía con validadores reales.** `ades-rs`
+> 0.2.0 tiene un bug (confirmado contra el DSS de la CE, ver
+> `ROADMAP.md`) que envuelve mal los datos de revocación — un
+> validador conforme al estándar no los reconoce, y trata la firma como
+> si solo fuera B-T. `portal` genera los bytes correctamente por su
+> parte; el bug está en la dependencia externa.
+
 ```bash
 # Verificación local sin depender del DSS de la CE
 openssl cms -verify -binary -in firma.p7s -inform DER -content original.txt \
