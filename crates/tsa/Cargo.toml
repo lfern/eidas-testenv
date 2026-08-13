@@ -1,0 +1,48 @@
+[package]
+name = "tsa"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "RFC 3161 timestamp authority (TSA) responder, signing with a ca-bootstrap-issued identity"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+
+# Signs the TimeStampToken with the `tsa` identity `ca bootstrap` already
+# produces. Default features only: only `Signer`/`SoftSigner` (from the
+# `soft` feature, on by default) and `cms::signature_algorithm_id` are
+# used, same subset `portal` already relies on.
+ades-rs = "0.2"
+# Builds the TimeStampReq/TimeStampResp/TSTInfo ASN.1 structures (typed,
+# not hand-rolled TLV) and the CMS SignedData wrapping the TimeStampToken.
+# Same version already resolved transitively via ades-rs -> no duplicate
+# major version in the dependency tree.
+cms = "0.2"
+der = { version = "0.7", features = ["derive", "alloc"] }
+x509-cert = "=0.2.5"
+spki = "0.7"
+const-oid = "0.9"
+# Loads the P-256 signing key (PEM -> SigningKey); ca bootstrap always
+# issues the `tsa` identity in P-256.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+sha2 = "0.10"
+# Random TSTInfo.serialNumber (RFC 3161 §2.4.2) — same rand_core version
+# already pulled in transitively by p256/rsa's own "getrandom" features.
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+# Local HTTP responder (POST / with a TimeStampReq body). `--host`
+# defaults to 127.0.0.1 like wallet/portal, but (unlike those two) can be
+# pointed at 0.0.0.0 explicitly for the Docker deployment: a TSA is a
+# service other processes are meant to reach, not a holder of a local
+# user's private material.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+
+[dev-dependencies]
+# Integration test: drives the responder with ades-rs's own TspClient
+# (the real, only consumer this crate needs to satisfy), not a hand-rolled
+# test client.
+ades-rs = { version = "0.2", features = ["tsp"] }

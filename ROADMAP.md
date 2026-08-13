@@ -446,10 +446,124 @@ Fases:
 
 - Verificación integrada en el propio `portal` (subir firma + original y
   comprobar in situ), en vez de depender de `openssl`/DSS externos.
-- PAdES/XAdES/JAdES, y niveles B-T/B-LT — bloqueados por no tener
-  TSA/OCSP reales corriendo (`docker/tsa`/`docker/ocsp` siguen stub).
+- PAdES/XAdES/JAdES, y niveles B-T/B-LT — `tsa`/`ocsp` ya existen y están
+  verificados (ver más abajo), pero `portal` todavía no activa las
+  features `tsp`/`ocsp` de `ades-rs` ni ofrece esos niveles en su UI;
+  sigue anotado como siguiente sprint natural, no hecho todavía.
 - Más identidades de firma además de `user-p256`/`user-rsa2048`, si
   `ca` acaba añadiendo `ca issue-user` (ver pendientes de `ca` arriba).
+
+## tsa / ocsp (sprint activo)
+
+Decisiones de diseño ya tomadas:
+
+- **Dos crates binarios nuevos, no scripts dentro de `docker/`**:
+  `crates/tsa` (RFC 3161) y `crates/ocsp` (RFC 6960 §4), mismo patrón
+  Axum que `wallet serve`/`portal serve` (lógica pura en
+  `token.rs`/`response.rs`, separada del wiring HTTP en `serve.rs`,
+  tipos ASN.1 tipados con `der::Sequence`/`der::Choice` en `asn1.rs`, no
+  TLV a mano). `docker/tsa`/`docker/ocsp` pasan de placeholders vacíos a
+  Dockerfiles multi-stage que compilan esos crates.
+- **Hallazgo que cambió el alcance previsto**: `ades-rs` 0.2.0 (la
+  dependencia que ya usa `portal`) **ya trae** un cliente TSP
+  (`ades::tsp::TspClient`, feature `tsp`) y un cliente OCSP
+  (`ades::ocsp::OcspClient`, feature `ocsp`), simplemente deshabilitados
+  en `portal/Cargo.toml` (solo features por defecto). No hacía falta
+  esperar a que `ades-rs` los soportara — construir los responders era
+  exactamente lo que faltaba para poder activar esas features y probar
+  B-T/B-LT de verdad. El formato de wire exacto (`TimeStampReq`/`Resp`,
+  `OCSPRequest`/`Response`) se fijó leyendo el código fuente real de
+  `ades::tsp::client.rs`/`ades::ocsp::client.rs`, no de memoria.
+- **`ades::cms::signature_algorithm_id` es `pub(crate)`, no exportado**
+  (comprobado leyendo `ades-rs-0.2.0/src/lib.rs`: `pub(crate) mod cms`) —
+  al contrario de lo previsto al planear esto, ambos crates reimplementan
+  su propia versión mínima (deriva el OID de `signatureAlgorithm` a
+  partir del OID de la clave pública y el algoritmo de digest; ambos
+  identidades `tsa`/`ocsp` son siempre P-256, así que solo hace falta la
+  rama ECDSA) — misma duplicación mínima y deliberada que el resto del
+  repo ya acepta (`portal`/`ca` no comparten un crate librería).
+- **`der` 0.7.10 no tiene tipo `Enumerated`** (se añadió en versiones
+  posteriores de `der`, que romperían el pin `x509-cert = "=0.2.5"` /
+  `cms = "0.2.3"` que ya fija el resto del workspace).
+  `OCSPResponseStatus` es un `ENUMERATED` de un byte (RFC 6960 §4.2.1);
+  `ocsp/src/asn1.rs` define un `Enumerated(pub u8)` propio implementando
+  `DecodeValue`/`EncodeValue`/`FixedTag` a mano, mismo patrón que usa la
+  propia `der` 0.7.10 internamente para `impl ... for bool` (un solo
+  byte, tag fijo distinto).
+- **`--host` por defecto `127.0.0.1`, no `0.0.0.0`** — mismo valor
+  seguro que `wallet`/`portal serve` — pero a diferencia de esos dos, el
+  `Dockerfile` de cada uno pasa `--host 0.0.0.0` explícitamente en su
+  `CMD`: un TSA/OCSP responder es, por diseño de protocolo, un servicio
+  de cara a otros procesos, no un servidor que guarda secretos de un
+  usuario local.
+- **OCSP siempre responde `good`**: `ca` no tiene CRL/revocación
+  (`grep -rin "crl\|revoc" crates/ca/src/` → cero resultados, confirmado
+  antes de implementar) — simplificación de entorno de pruebas
+  documentada explícitamente en `response.rs`, no un bug. Suficiente
+  para ejercitar los futuros niveles B-T/B-LT de `portal`, no para
+  probar escenarios reales de revocación.
+- **Bug real encontrado durante la verificación con `openssl ocsp`** (no
+  anticipado por el diseño ni por `ades::ocsp::OcspClient`, que nunca
+  manda extensiones): el `TbsRequest` inicial solo modelaba
+  `requestList`, sin los campos opcionales `version`/`requestorName`/
+  `requestExtensions`. `openssl ocsp` (a diferencia del cliente de
+  `ades-rs`) siempre añade una extensión de nonce en `requestExtensions`
+  — `der::Sequence::from_der` fallaba al encontrar bytes que no
+  esperaba, y el responder contestaba `malformedRequest` con una petición
+  perfectamente válida. Arreglado modelando los tres campos opcionales
+  de `TBSRequest` (y `singleRequestExtensions` en `Request`, por la misma
+  razón) como `Option<...>` con sus tags `EXPLICIT` correctos, aunque
+  ninguno se lea nunca — la corrección está en tolerar su presencia en
+  el DER, no en usarlos.
+
+Fases:
+
+- [x] **Phase 1** — `tsa serve`/`ocsp serve` implementados. Build,
+      `cargo clippy --workspace --all-targets -- -D warnings` y
+      `cargo fmt --all -- --check` limpios en todo el workspace. 6 tests
+      unitarios sin red (`token.rs`/`response.rs`: acepta una petición
+      bien formada, rechaza basura con el estado de rechazo/malformed
+      del protocolo en vez de un error HTTP) más 2 tests de integración
+      — uno por crate — que levantan el servidor Axum en un puerto
+      efímero dentro del propio test y le piden un timestamp/consultan
+      el estado con el cliente real de `ades-rs`
+      (`ades::tsp::TspClient`/`ades::ocsp::OcspClient`, como
+      dev-dependency con la feature `tsp`/`ocsp`, nunca en el binario de
+      producción) — mismo criterio "verificado por el consumidor real"
+      que el resto del repo usa (`openssl verify` para `ca`, el DSS de
+      la CE para `portal`).
+
+      **Verificado además con herramientas independientes de `ades-rs`**
+      (2026-08-13): `cargo run -p tsa -- serve` + `openssl ts -query`/
+      `openssl ts -reply -in resp.tsr -text` decodifica correctamente
+      todos los campos del `TSTInfo` (policy OID, digest, serial,
+      timestamp); `openssl ts -verify -in resp.tsr -data ... -CAfile
+      (root+sub-ca) -untrusted (tsa+sub-ca)` → `Verification: OK`.
+      `cargo run -p ocsp -- serve` + `openssl ocsp -issuer ... -cert ...
+      -reqout` / `openssl ocsp -respin resp.der -text` → `good`;
+      `openssl ocsp -respin resp.der -CAfile (root+sub-ca) -verify_other
+      (ocsp+sub-ca) ...` → `Response verify OK`. Phase 1 cerrada.
+
+### Pendiente
+
+- **Activar `tsp`/`ocsp` en `crates/portal/Cargo.toml` y añadir niveles
+  B-T/B-LT a `portal serve`** — el paso natural siguiente ahora que los
+  responders existen y están verificados; no hecho en este sprint a
+  propósito, para no mezclar "los responders funcionan" con "portal los
+  usa" en una misma verificación.
+- **`docker compose build tsa ocsp && docker compose up tsa ocsp` sin
+  verificar** — Docker no estaba disponible en el entorno donde se
+  implementó esto (sin integración WSL de Docker Desktop). Los
+  `Dockerfile` (multi-stage, `rust:1.80-bookworm` + `debian:bookworm-
+  slim`) y el `docker-compose.yml` (contexto de build cambiado a la raíz
+  del repo, ya que un workspace Cargo necesita todos los `crates/*` para
+  resolver) están escritos y revisados, pero no se ha comprobado que la
+  imagen compile ni que el binding `0.0.0.0` + mapeo de puertos funcione
+  de verdad en Docker. Pendiente de que el usuario lo compruebe.
+- Revocación real en `ocsp` — depende de que `ca` añada soporte de
+  CRL/revocación primero (ver pendientes de `ca` arriba).
+- B-LTA (archive timestamp) — ni siquiera `ades-rs` 0.2.0 lo implementa
+  todavía (confirmado por `grep` en su código fuente).
 
 ## verifier
 

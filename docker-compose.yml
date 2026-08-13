@@ -1,13 +1,20 @@
 services:
   tsa:
-    build: ./docker/tsa
+    # Context is the repo root, not docker/tsa: the Dockerfile needs the
+    # whole Cargo workspace (Cargo.lock + every crates/* member) to
+    # resolve and build the `tsa` crate, not just its own directory.
+    build:
+      context: .
+      dockerfile: docker/tsa/Dockerfile
     volumes:
       - ./data/ca:/certs:ro
     ports:
       - "2560:2560"
 
   ocsp:
-    build: ./docker/ocsp
+    build:
+      context: .
+      dockerfile: docker/ocsp/Dockerfile
     volumes:
       - ./data/ca:/certs:ro
     ports:

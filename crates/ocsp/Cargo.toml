@@ -1,0 +1,45 @@
+[package]
+name = "ocsp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "RFC 6960 OCSP responder, signing with a ca-bootstrap-issued identity"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+
+# Signs the BasicOCSPResponse with the `ocsp` identity `ca bootstrap`
+# already produces. Default features only: only `Signer`/`SoftSigner`
+# (from the `soft` feature, on by default) are used, same subset
+# `portal`/`tsa` already rely on.
+ades-rs = "0.2"
+# Builds the OCSPRequest/OCSPResponse ASN.1 structures (typed, not
+# hand-rolled TLV). Same versions already resolved elsewhere in the
+# workspace (via ades-rs / x509-cert / cms) -> no duplicate major version.
+der = { version = "0.7", features = ["derive", "alloc"] }
+x509-cert = "=0.2.5"
+spki = "0.7"
+const-oid = "0.9"
+# Loads the P-256 signing key (PEM -> SigningKey); ca bootstrap always
+# issues the `ocsp` identity in P-256.
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+sha1 = "0.10"
+sha2 = "0.10"
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+# Local HTTP responder (POST / with an OCSPRequest body). `--host`
+# defaults to 127.0.0.1 like wallet/portal, but (unlike those two) can be
+# pointed at 0.0.0.0 explicitly for the Docker deployment: an OCSP
+# responder is a service other processes are meant to reach, not a
+# holder of a local user's private material.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+
+[dev-dependencies]
+# Integration test: drives the responder with ades-rs's own OcspClient
+# (the real, only consumer this crate needs to satisfy), not a
+# hand-rolled test client.
+ades-rs = { version = "0.2", features = ["ocsp"] }

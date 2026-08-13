@@ -40,7 +40,9 @@ dependencies = [
  "signature",
  "spki 0.7.3",
  "thiserror 1.0.69",
+ "ureq",
  "x509-cert",
+ "x509-ocsp",
 ]
 
 [[package]]
@@ -1968,7 +1970,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots",
+ "webpki-roots 1.0.8",
 ]
 
 [[package]]
@@ -3054,6 +3056,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ocsp"
+version = "0.1.0"
+dependencies = [
+ "ades-rs",
+ "anyhow",
+ "axum",
+ "clap",
+ "const-oid 0.9.6",
+ "der 0.7.10",
+ "p256",
+ "rand_core 0.6.4",
+ "sha1",
+ "sha2 0.10.9",
+ "spki 0.7.3",
+ "tokio",
+ "x509-cert",
+]
+
+[[package]]
 name = "oid4vci"
 version = "0.1.0"
 source = "git+https://github.com/spruceid/oid4vci-rs#7cfd5a012229de08aac363b27a41e226b494f9cc"
@@ -3878,7 +3899,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots",
+ "webpki-roots 1.0.8",
 ]
 
 [[package]]
@@ -4047,6 +4068,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6b92b125634d9b795e7beca796cc790df15a7fb38323bf3196fda83292d06b1f"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "ring",
  "rustls-pki-types",
@@ -5889,6 +5911,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
+name = "tsa"
+version = "0.1.0"
+dependencies = [
+ "ades-rs",
+ "anyhow",
+ "axum",
+ "clap",
+ "cms",
+ "const-oid 0.9.6",
+ "der 0.7.10",
+ "p256",
+ "rand_core 0.6.4",
+ "sha2 0.10.9",
+ "spki 0.7.3",
+ "tokio",
+ "x509-cert",
+]
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5939,6 +5980,24 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "url",
+ "webpki-roots 0.26.11",
+]
 
 [[package]]
 name = "url"
@@ -6147,6 +6206,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d46a5a140e6f7afeccd8eae97eff335163939eac8b929834875168b29b3d267"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "webpki-roots"
+version = "0.26.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
+dependencies = [
+ "webpki-roots 1.0.8",
 ]
 
 [[package]]
@@ -6495,6 +6563,18 @@ dependencies = [
  "signature",
  "spki 0.7.3",
  "tls_codec",
+]
+
+[[package]]
+name = "x509-ocsp"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e54e695a31f0fecb826cf59ae2093c941d7ef932a1f8508185dd23b29ce2e2e"
+dependencies = [
+ "const-oid 0.9.6",
+ "der 0.7.10",
+ "spki 0.7.3",
+ "x509-cert",
 ]
 
 [[package]]

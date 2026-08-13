@@ -22,6 +22,8 @@ certificados reales de un QTSP.
 | `tl` | Generador de Trusted List (ETSI TS 119 612) | En desarrollo — `bootstrap` funcional |
 | `verifier` | Verifier OID4VP propio | Stub, sin implementar |
 | `portal` | Portal de demo AdES (firma CAdES B-B) | En desarrollo — `serve` funcional |
+| `tsa` | Responder RFC 3161 (timestamp authority) | En desarrollo — `serve` funcional |
+| `ocsp` | Responder RFC 6960 (OCSP) | En desarrollo — `serve` funcional |
 
 Ver [`ROADMAP.md`](ROADMAP.md) para el detalle de fases y decisiones de
 diseño del sprint activo, y [`CLAUDE.md`](CLAUDE.md) para las reglas
@@ -172,6 +174,58 @@ un error de integridad de la firma sí indicaría un problema real.
 No existe (todavía) un script que automatice la subida al DSS — su
 formulario web no es una API pública pensada para *scripting* — así que
 este paso se hace a mano, en el navegador.
+
+## `tsa` / `ocsp` — guía rápida
+
+Responder RFC 3161 (timestamp authority) y responder RFC 6960 (OCSP),
+firmando con las identidades `tsa`/`ocsp` que `ca bootstrap` ya genera.
+`portal` todavía no los usa (eso es B-T/B-LT, el siguiente sprint
+natural — ver `ROADMAP.md`); por ahora se pueden probar de forma
+independiente:
+
+```bash
+# Requiere haber ejecutado antes `ca bootstrap`
+cargo run -p tsa -- serve --port 2560 --ca-dir ./data/ca
+cargo run -p ocsp -- serve --port 2561 --ca-dir ./data/ca
+```
+
+Verificación con `openssl` (sin depender de `ades-rs`):
+
+```bash
+# TSA
+openssl ts -query -data <archivo> -sha256 -cert -out req.tsq
+curl -s -X POST http://127.0.0.1:2560/ -H "Content-Type: application/timestamp-query" \
+  --data-binary @req.tsq -o resp.tsr
+openssl ts -reply -in resp.tsr -text
+openssl ts -verify -in resp.tsr -data <archivo> \
+  -CAfile <(cat data/ca/root/cert.pem data/ca/sub-ca/cert.pem) \
+  -untrusted <(cat data/ca/tsa/cert.pem data/ca/sub-ca/cert.pem)
+
+# OCSP
+openssl ocsp -issuer data/ca/sub-ca/cert.pem -cert data/ca/user-p256/cert.pem \
+  -reqout req.der
+curl -s -X POST http://127.0.0.1:2561/ -H "Content-Type: application/ocsp-request" \
+  --data-binary @req.der -o resp.der
+openssl ocsp -respin resp.der -text \
+  -issuer data/ca/sub-ca/cert.pem -cert data/ca/user-p256/cert.pem \
+  -CAfile <(cat data/ca/root/cert.pem data/ca/sub-ca/cert.pem) \
+  -verify_other <(cat data/ca/ocsp/cert.pem data/ca/sub-ca/cert.pem)
+```
+
+`--host` por defecto es `127.0.0.1` en ambos, a diferencia de
+`wallet`/`portal serve` (que nunca salen de `127.0.0.1`): un TSA/OCSP es,
+por diseño de protocolo, un servicio de cara a otros procesos, así que
+`docker-compose.yml`/los `Dockerfile` de `docker/tsa`/`docker/ocsp` lo
+levantan con `--host 0.0.0.0`:
+
+```bash
+docker compose build tsa ocsp
+docker compose up tsa ocsp
+```
+
+El `ocsp` de esta fase siempre responde `good` — `ca` no tiene
+CRL/revocación todavía (ver `ROADMAP.md`), no hay estado de revocación
+real que consultar.
 
 ## Comandos de desarrollo
 

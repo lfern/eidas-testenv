@@ -5,6 +5,8 @@ members = [
     "crates/tl",
     "crates/verifier",
     "crates/portal",
+    "crates/tsa",
+    "crates/ocsp",
 ]
 resolver = "2"
 
