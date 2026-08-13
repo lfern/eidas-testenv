@@ -730,7 +730,129 @@ Fases:
 - B-LTA (archive timestamp) — ni siquiera `ades-rs` 0.2.0 lo implementa
   todavía (confirmado por `grep` en su código fuente).
 
-## verifier
+## verifier (sprint activo)
 
-Solo stub (`println!("not implemented yet")`). Sin sprint planificado
-todavía — se detallará aquí cuando arranque.
+Decisiones de diseño ya tomadas:
+
+- **Verificador OID4VP real, interoperando con el `wallet` de este mismo
+  repo** — no con una wallet móvil real todavía. Hallazgo que cambió el
+  alcance previsto: `openid4vp` (el mismo crate git de SpruceID que
+  `wallet` ya usa desde el lado cliente) **ya trae una implementación
+  completa del lado verificador/RP** — `openid4vp::verifier::{Verifier,
+  VerifierBuilder}` orquesta sesiones y construcción de peticiones,
+  `client::{X509HashClient, X509SanDnsClient, DIDClient}` firma la
+  petición como JAR, `session::{SessionStore, MemoryStore}` ya trae
+  almacenamiento en memoria implementado, `DcqlQuery`/
+  `DcqlCredentialClaimsQuery` traen un builder completo. Confirmado
+  leyendo el código fuente real
+  (`~/.cargo/git/checkouts/openid4vp-.../src/verifier/`), no solo el
+  resumen de un agente.
+- **Lo que la librería NO trae**: verificación criptográfica de la
+  respuesta entrante — descifrado JARM y comprobación del SD-JWT+KB-JWT.
+  Esa parte solo existe como *ejemplo* en el propio repo de `openid4vp`
+  (`examples/verifier-conformance-adapter/server/handlers.rs
+  ::verify_sd_jwt_vc`), usando `ssi::claims::sd_jwt`/`ssi::claims::jws`
+  — la misma versión de `ssi` que `wallet::sd_jwt.rs` ya usa para el
+  lado contrario. `response.rs` adapta ese ejemplo casi literalmente.
+- **`WalletMetadata::openid4vp_scheme_static()` (el "default" obvio) no
+  sirve tal cual** — declara `vp_formats_supported = jwt_vc_json` (no
+  `dc+sd-jwt`, lo que `wallet`/PID usan) y no declara ningún
+  `ClientIdPrefixesSupported`; `request_builder.rs` exige que la
+  wallet_metadata declare soportado el `client_id_scheme` elegido o
+  revienta con `bail!`. `request.rs::target_wallet_metadata` construye
+  la propia, mismo patrón que `wallet::present.rs::wallet_metadata()`
+  usa del otro lado (mismo autor, mismo repo — sabemos exactamente qué
+  declara nuestra propia wallet).
+- **Solo `client_id_scheme=x509_hash`**, no `x509_san_dns`/DID — es el
+  que tiene track record real contra `verifier.eudiw.dev` (ver Phase 3
+  de `wallet`).
+- **Solo `response_mode=direct_post`** en esta fase, no
+  `direct_post.jwt` (JARM/cifrado) — mismo patrón de fases que ya
+  funcionó bien en `portal` (B-B → B-T → B-LT): cerrar lo básico
+  primero. JARM queda anotado como Phase 2 natural.
+- **Petición "by reference"** (`request_uri`), como los verificadores
+  reales.
+- **Identidad de firma propia, autofirmada, generada y persistida por
+  `verifier` mismo** (`identity.rs`, mismo patrón "generar una vez y
+  reutilizar" que `wallet/src/holder_key.rs`) — **no** depende de `ca
+  bootstrap`. Decidido explícitamente con el usuario antes de
+  implementar: `ca` es un crate ya cerrado y semánticamente pensado para
+  identidades de firma AdES (TSA/OCSP/user), no para firmar peticiones
+  OID4VP; y `wallet::present.rs` no valida cadena hasta una root de
+  confianza para `x509_hash` (solo la clave del propio leaf del JWT), así
+  que un certificado autofirmado por `verifier` es tan válido para
+  nuestra wallet como uno emitido por `ca`.
+- **Sin validar la cadena del emisor de la credencial presentada** —
+  mismo límite que `wallet::present.rs` ya documenta (no hay trust
+  anchor local para el certificado real de `issuer.eudiw.dev`); esta
+  fase verifica corrección criptográfica y estructural de la
+  presentación (firma del issuer contra su propia clave incluida en
+  `x5c`, firma del KB-JWT contra `cnf.jwk` del holder, `nonce`/`aud`/
+  `sd_hash` correctos), no la confianza en la PKI del emisor.
+- **DCQL pide un subconjunto concreto de claims** (`given_name`,
+  `family_name`, `birthdate` de `vct=urn:eudi:pid:1`), no "todo lo que
+  haya" — demuestra que la revelación selectiva funciona de verdad (se
+  ven exactamente esas claims reveladas, ni más ni menos).
+
+Fases:
+
+- [x] **Phase 1** — `verifier serve` implementado: `identity.rs`
+      (identidad P-256 autofirmada), `request.rs` (construye la petición
+      DCQL + `WalletMetadata` propia + la firma vía `Verifier`),
+      `response.rs` (verifica SD-JWT+KB-JWT, adaptado del ejemplo de
+      `openid4vp`), `serve.rs` (Axum: `POST /api/request`, `GET
+      /request/:uuid`, `POST /response/:uuid`, `GET /api/status/:uuid`).
+      8 tests unitarios sin red: `identity.rs` (generar/persistir/
+      recargar round-trip), `request.rs` (forma del DCQL, URL bien
+      formada, JWT recuperable), `response.rs` (SD-JWT+KB-JWT sintético
+      construido con `ssi` — mismo estilo que `wallet::sd_jwt.rs` — que
+      se acepta, y variantes con nonce/aud/firma manipulados que se
+      rechazan).
+
+      **Bug real encontrado por los propios tests** (no en producción):
+      el primer intento de `build_presentation_request` no incluía el
+      parámetro `nonce` (obligatorio en OID4VP, es lo que ata el KB-JWT
+      a esta transacción) — `request_builder.rs` lo rechazaba con
+      `'nonce' is missing`. Arreglado generando un nonce por petición
+      (`Uuid::new_v4()`) antes de llegar siquiera a la verificación
+      manual.
+
+      **`wallet` es un binario, no una librería** (igual que `tsa`/
+      `ocsp` frente a `ades-rs`) — no se pudo montar un test de
+      integración en proceso que use el `wallet` real como cliente. El
+      criterio de corrección de esta fase es la verificación externa
+      manual que ya usa el resto del repo, aquí con **el propio
+      `wallet`** haciendo de oráculo real:
+
+      **Verificado manualmente** (2026-08-13, `wallet` con un PID real
+      ya emitido por `issuer.eudiw.dev`): `cargo run -p verifier --
+      serve` → `POST /api/request` → `cargo run -p wallet -- present
+      --url <request_url>` → `GET /api/status/:uuid` →
+      `{"Complete":{"Success":{"info":{"disclosed_claims":
+      {"given_name":"Fernando","family_name":"Luis","birthdate":
+      "1970-08-08"}}}}}` — las tres claims pedidas, ni una más, con los
+      valores reales del PID.
+
+      **Segundo hallazgo real, en esta implementación, no en la
+      librería**: la primera pasada solo devolvía 2 de 3 claims
+      (faltaba la fecha de nacimiento). Inspeccionado el SD-JWT real
+      almacenado (`~/.eidas-testenv/wallet/credentials/*.json`): el PID
+      real del EUDIW usa el claim `birthdate` (sin guión bajo), no
+      `birth_date` como se había asumido al escribir `REQUESTED_CLAIMS`
+      sin comprobarlo contra una credencial real primero. Corregido y
+      revalidado con una segunda ronda del mismo flujo manual (arriba,
+      ya con el resultado correcto). Phase 1 cerrada.
+
+### Pendiente, sin prisa (anotado, no bloquea Phase 1)
+
+- `response_mode=direct_post.jwt` (JARM/respuesta cifrada) — Phase 2
+  natural.
+- `client_id_scheme=x509_san_dns`/DID — solo `x509_hash` por ahora.
+- Validación de la cadena de confianza del emisor de la credencial
+  presentada — no hay trust anchor local para `issuer.eudiw.dev`.
+- Interoperar con una wallet móvil real (generación de QR, perfil
+  `haip`) — solo probado contra el `wallet` CLI de este repo.
+- OID4VP §8.2 permite responder 4xx en vez de 200 cuando se rechaza una
+  presentación — `serve.rs` siempre responde 200 y deja el veredicto
+  para `GET /api/status/:uuid`; documentado como simplificación
+  deliberada en el propio código, no como bug.

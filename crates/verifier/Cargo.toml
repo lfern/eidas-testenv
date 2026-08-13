@@ -5,6 +5,72 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "OID4VP verifier service (Axum) — not implemented yet"
+description = "OID4VP verifier (relying party), interoperating with this repo's own `wallet`"
 
 [dependencies]
+# Verifier/RP-side OID4VP: request building + signing (Verifier, Client,
+# RequestBuilder), session tracking (SessionStore, MemoryStore), DCQL
+# query builder. Same crate (and same unpinned git ref, resolved via
+# Cargo.lock) `wallet` already uses from the client side.
+openid4vp = { git = "https://github.com/spruceid/openid4vp" }
+# SD-JWT VC + KB-JWT verification of the incoming presentation
+# (ssi::claims::sd_jwt::SdJwt, ssi::claims::jws::decode_verify) — same
+# version openid4vp itself pins and wallet already uses for the
+# construction side. "secp256r1" feature: JWK support for P-256 (holder
+# key recovered from `cnf.jwk`), same feature wallet already enables.
+ssi = { version = "0.16", features = ["secp256r1"] }
+
+# Self-signed P-256 identity this verifier signs its own requests with
+# (JAR, x509_hash client_id_scheme) — mirrors ca::bootstrap's own
+# certificate-building technique, not ca itself (see ROADMAP.md: `ca` is
+# closed and semantically scoped to AdES signing identities, not OID4VP
+# request signing; wallet's x509_hash validation doesn't check a chain
+# to a root anyway, so a self-signed leaf is sufficient).
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "jwk"] }
+x509-cert = { version = "=0.2.5", features = ["builder"] }
+der = { version = "0.7", features = ["derive", "alloc"] }
+# "oid" feature: x509-cert's CertificateBuilder needs Sha256 to implement
+# AssociatedOid to derive the certificate's signature algorithm
+# identifier. Same exact version ca's own Cargo.toml pins, for the same
+# reason (see its own comment there).
+sha2 = { version = "=0.10.9", features = ["oid"] }
+# Random key generation and cert serial numbers, same version already
+# resolved elsewhere in the workspace (tsa/ocsp).
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+# openid4vp's own reqwest dependency doesn't disable reqwest's default
+# features, so native-tls (and its openssl-sys build) is pulled in
+# regardless. This box has no pkg-config/libssl-dev and no root access,
+# so force openssl-sys to build OpenSSL from source instead — same
+# already-documented exception `wallet`'s Cargo.toml carries (see
+# CLAUDE.md).
+openssl = { version = "0.10", features = ["vendored"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# openid4vp's own request/response types take `url::Url`; verifier
+# sessions are keyed by `uuid::Uuid` (same crate/feature wallet uses).
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+# Decoding the x5c header of an incoming presentation's issuer JWT.
+base64 = "0.22"
+# ssi::claims::ValidateClaims needs a DateTimeProvider ("now") to check
+# the KB-JWT's time claims against.
+chrono = "0.4"
+# Required to implement openid4vp's `SessionStore`/request-signer traits
+# if a custom one is ever needed — same externally-imposed exception
+# already accepted for `wallet`'s `Wallet`/`RequestVerifier` impls (see
+# CLAUDE.md). Phase 1 only uses the library's own `MemoryStore`, kept as
+# a direct dependency since `openid4vp`'s public API surface exposes
+# `#[async_trait]`-annotated traits.
+async-trait = "0.1"
+
+# Local HTTP server (POST /api/request, GET /request/:id, POST
+# /response/:id, GET /api/status/:id). Trimmed feature set, same as
+# wallet/portal/tsa/ocsp.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+# Cross-platform home dir resolution for ~/.eidas-testenv, same as
+# `wallet`'s own identity persistence.
+directories = "5"

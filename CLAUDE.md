@@ -15,7 +15,8 @@ Crates:
   `verifier.eudiw.dev`). **En desarrollo.**
 - `ca`, `tl`, `verifier`, `portal` — generador de cadena CA, generador de
   Trusted List (ETSI TS 119 612), verifier OID4VP propio, portal de demo
-  AdES. **Stubs**, sin implementar todavía.
+  AdES. **En desarrollo** (ver `ROADMAP.md` para el estado real de cada
+  uno — este resumen no se mantiene al día).
 
 Ver `ROADMAP.md` para el estado actual de cada crate/fase — este fichero
 (`CLAUDE.md`) solo contiene reglas y decisiones estables, no tracking de
@@ -114,11 +115,17 @@ componente tiene el suyo:
 - `wallet`: el flujo funciona end-to-end contra los servicios oficiales —
   `issuer.eudiw.dev` acepta la petición de credencial, `verifier.eudiw.dev`
   acepta la presentación
-- `ca` (futuro): `openssl verify` acepta la cadena generada; los
-  certificados son consumibles por `ades-rs`
-- `tl` (futuro): XML válido según ETSI TS 119 612
-- `verifier` / `portal` (futuro): firmas AdES generadas/validadas por el
-  DSS de la CE (mismo criterio que usa `ades-rs`)
+- `ca`: `openssl verify` acepta la cadena generada; los certificados son
+  consumibles por `ades-rs`
+- `tl`: XML válido según ETSI TS 119 612
+- `portal`: firmas AdES generadas/validadas por el DSS de la CE (mismo
+  criterio que usa `ades-rs`)
+- `verifier`: el `wallet` de este mismo repo (ya probado end-to-end
+  contra `issuer.eudiw.dev`) presenta una credencial real contra él y la
+  marca como válida, con exactamente las claims pedidas por DCQL
+  reveladas — no hay un validador externo de referencia para el lado
+  verificador de OID4VP como sí lo hay para AdES (el DSS) o para
+  certificados (`openssl`), así que el propio `wallet` hace de oráculo
 
 ## Lo que NO hacer ahora
 
@@ -129,8 +136,9 @@ componente tiene el suyo:
 - No montar infraestructura propia (ngrok, servidor público) para el
   wallet — no hace falta contra los endpoints oficiales tal y como
   funcionan hoy
-- No trabajar en `ca` / `tl` / `verifier` / `portal` más allá del stub
-  hasta que les toque su sprint
+- No trabajar en componentes más allá de su stub hasta que les toque su
+  sprint (`ca`/`tl`/`portal`/`verifier` ya tuvieron el suyo — ver
+  `ROADMAP.md` para el estado real de cada uno)
 - **`wallet` no implementa firma remota cualificada (QES)** — solo
   emisión (OID4VCI) y presentación (OID4VP) de credenciales, tal y como
   dice su descripción arriba. Firmar con un certificado cualificado vía un

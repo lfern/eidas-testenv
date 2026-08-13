@@ -20,8 +20,8 @@ certificados reales de un QTSP.
 | `wallet` | CLI que obtiene (OID4VCI) y presenta (OID4VP) una credencial PID contra los endpoints oficiales de la CE | En desarrollo — `issue`/`present`/`list` funcionales |
 | `ca` | Generador estático de PKI de pruebas (Root CA, Sub-CA, TSA, OCSP, user certs) | En desarrollo — `bootstrap`/`list` funcionales |
 | `tl` | Generador de Trusted List (ETSI TS 119 612) | En desarrollo — `bootstrap` funcional |
-| `verifier` | Verifier OID4VP propio | Stub, sin implementar |
-| `portal` | Portal de demo AdES (firma CAdES B-B) | En desarrollo — `serve` funcional |
+| `verifier` | Verifier OID4VP propio | En desarrollo — `serve` funcional |
+| `portal` | Portal de demo AdES (firma CAdES B-T/B-LT) | En desarrollo — `serve` funcional |
 | `tsa` | Responder RFC 3161 (timestamp authority) | En desarrollo — `serve` funcional |
 | `ocsp` | Responder RFC 6960 (OCSP) | En desarrollo — `serve` funcional |
 
@@ -236,6 +236,40 @@ docker compose up tsa ocsp
 El `ocsp` de esta fase siempre responde `good` — `ca` no tiene
 CRL/revocación todavía (ver `ROADMAP.md`), no hay estado de revocación
 real que consultar.
+
+## `verifier` — guía rápida
+
+Verificador OID4VP (relying party) real: genera una petición de
+presentación pidiendo un subconjunto de claims del PID
+(`given_name`/`family_name`/`birthdate`), y verifica la respuesta de una
+wallet (SD-JWT + Key Binding JWT). Interopera con el `wallet` de este
+mismo repo — no con una wallet móvil real todavía.
+
+```bash
+cargo run -p verifier -- serve --port 9090
+```
+
+Genera una identidad de firma propia y autofirmada en
+`~/.eidas-testenv/verifier/` la primera vez que arranca (no depende de
+`ca bootstrap`).
+
+```bash
+# 1. Pide una nueva petición de presentación
+curl -s -X POST http://127.0.0.1:9090/api/request
+# -> {"uuid": "...", "request_url": "openid4vp:?client_id=...&request_uri=..."}
+
+# 2. Se la pasas a wallet (requiere tener ya un PID: `wallet issue`)
+cargo run -p wallet -- present --url '<request_url de arriba>'
+
+# 3. Compruebas el resultado
+curl -s http://127.0.0.1:9090/api/status/<uuid>
+# -> {"Complete":{"Success":{"info":{"disclosed_claims":{"given_name":"...", ...}}}}}
+```
+
+No valida la cadena de confianza del emisor de la credencial (no hay
+trust anchor local para `issuer.eudiw.dev`) ni soporta todavía
+`direct_post.jwt` (JARM/respuesta cifrada) — solo `direct_post` sin
+cifrar. Ver `ROADMAP.md` para el resto de límites de esta fase.
 
 ## Comandos de desarrollo
 
