@@ -3,16 +3,10 @@
 # the whole `crates/` tree is copied in, not just `crates/ocsp`), then
 # ships only the resulting binary in a minimal runtime image.
 #
-# Builder image is NOT the workspace's declared MSRV (1.80, see
-# Cargo.toml) — resolving the workspace graph (required even to build
-# just this one member) needs rustc 1.85+, because `wallet`'s git
-# dependency `open-auth2-rs` declares `edition = "2024"` in its own
-# Cargo.toml. That's a pre-existing MSRV/reality mismatch in the
-# workspace, unrelated to `ocsp`; masked outside Docker because dev
-# machines typically have a much newer rustc than the declared MSRV.
-# Flagged in ROADMAP.md rather than silently "fixed" here — CLAUDE.md
-# marks MSRV as a decision not to change without consulting.
-FROM rust:1.90-bookworm AS builder
+# Builder image matches the workspace's declared MSRV (see Cargo.toml,
+# rust-version = "1.89" — confirmed by building the whole workspace with
+# exactly this image, not assumed).
+FROM rust:1.89-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates

@@ -690,26 +690,41 @@ Fases:
   el bind a `0.0.0.0` dentro del contenedor, como esperaba el `CMD` de
   cada `Dockerfile`.
 
-  **Hallazgo real, no relacionado con `tsa`/`ocsp`**: el primer intento
-  de build falló — `rust:1.80-bookworm` (la imagen que coincide con el
-  MSRV que declara `Cargo.toml`, `rust-version = "1.80"`) no puede
-  resolver el workspace en absoluto, ni siquiera para compilar solo
-  `tsa`/`ocsp` (que no dependen de `wallet` para nada): la dependencia
-  git de `wallet`, `open-auth2-rs`, declara `edition = "2024"` en su
-  propio `Cargo.toml`, lo que exige Cargo/rustc 1.85+. Con `rust:1.85-
-  bookworm` apareció un segundo escalón: `time` (dependencia transitiva)
-  exige 1.88+. Arreglado subiendo los `Dockerfile` a `rust:1.90-
-  bookworm` (con margen). **El MSRV real de este workspace es más alto
-  que el `1.80` que declara `Cargo.toml`** — nunca se había visto porque
-  toda máquina de desarrollo usada hasta ahora tiene un `rustc` muy por
-  encima (`rustc --version` en el host: 1.96.0). No se ha tocado
-  `Cargo.toml`/`CLAUDE.md` para "corregir" el MSRV declarado —
-  `CLAUDE.md` marca el MSRV como una decisión que no se cambia sin
-  consultar — solo se ha subido la imagen builder de Docker lo justo
-  para que compile. Anotado como pendiente real a decidir: o se sube el
-  MSRV declarado a lo que de verdad hace falta, o se fija
-  `open-auth2-rs`/`time` a versiones más antiguas compatibles con 1.80
-  de verdad.
+  **Hallazgo real, no relacionado con `tsa`/`ocsp` — MSRV corregido**
+  (2026-08-13): el primer intento de build falló —
+  `rust:1.80-bookworm` (la imagen que coincidía con el `rust-version =
+  "1.80"` que declaraba entonces `Cargo.toml`) no puede resolver el
+  workspace en absoluto, ni siquiera para compilar solo `tsa`/`ocsp`
+  (que no dependen de `wallet` para nada): la dependencia git de
+  `wallet`, `open-auth2-rs`, declara `edition = "2024"` en su propio
+  `Cargo.toml`, lo que exige rustc 1.85+.
+
+  En vez de subir la imagen de Docker a ojo hasta que compilara, se
+  calculó el MSRV real inspeccionando el campo `rust-version` de cada
+  paquete resuelto vía `cargo metadata` (`rows.sort(...)`, el máximo de
+  todos): **`iref` 4.1.0 (vía `wallet`→`oid4vci`) exige 1.89.0** — el
+  tope real de todo el workspace, más alto que el `time` 0.3.53 (vía
+  `ades-rs`→`lopdf`, este último sí afecta a `tsa`/`ocsp`/`portal`
+  directamente, no solo a `wallet`) que exige 1.88. Confirmado
+  compilando el **workspace completo** (`cargo build --workspace`, no
+  solo `tsa`/`ocsp`) dentro de un contenedor `rust:1.89-bookworm` limpio
+  — sin errores, `1.89` es suficiente de verdad, no una suposición.
+
+  Decidido con el usuario: se corrige el MSRV declarado a la realidad
+  (opción "subir `rust-version` a 1.89") en vez de intentar fijar
+  `open-auth2-rs`/`time` a versiones antiguas compatibles con `1.80` —
+  esa segunda vía no era viable de todos modos: `open-auth2-rs` es una
+  dependencia git sin semver fijada a un commit concreto
+  (`rev = "5d653ea"`) cuyo propio manifiesto ya exige `edition2024`, no
+  hay `cargo update --precise` que lo resuelva. `Cargo.toml`
+  (`rust-version = "1.89"`) y `CLAUDE.md` actualizados; los `Dockerfile`
+  de `tsa`/`ocsp` ahora usan `rust:1.89-bookworm` exacto (ya coincide
+  con el MSRV declarado, sin necesitar margen de más). Nunca se había
+  detectado porque toda máquina de desarrollo usada hasta ahora tiene un
+  `rustc` muy por encima (`rustc --version` en el host: 1.96.0) — Cargo
+  no fuerza el `rust-version` declarado al resolver, solo al compilar
+  con un toolchain más antiguo que él, que es justo lo que hizo Docker
+  por primera vez.
 - Revocación real en `ocsp` — depende de que `ca` añada soporte de
   CRL/revocación primero (ver pendientes de `ca` arriba).
 - B-LTA (archive timestamp) — ni siquiera `ades-rs` 0.2.0 lo implementa

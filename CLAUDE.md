@@ -44,7 +44,15 @@ cargo run -p <crate> -- --help                      # ver comandos de un crate
 - `#![forbid(unsafe_code)]` en todo crate nuevo (aplica a nuestro propio
   código; las dependencias externas pueden usar `unsafe` internamente, eso
   no lo controlamos ni lo intentamos prohibir)
-- MSRV: Rust 1.80, edition 2021 (**no** edition 2024, que exige rustc 1.85+)
+- MSRV: Rust 1.89, edition 2021 (edition de nuestros propios crates — no
+  relacionado con el MSRV, que lo fijan dependencias transitivas, no una
+  elección nuestra: `iref` 4.1.0, vía `wallet`→`oid4vci`, exige 1.89;
+  `time` 0.3.53, vía `ades-rs`→`lopdf` — este último afecta también a
+  `tsa`/`ocsp`/`portal`, no solo a `wallet` — exige 1.88. El número real
+  se confirmó compilando el workspace completo dentro de Docker con
+  `rust:1.89-bookworm` (2026-08-13, ver `ROADMAP.md`), no a ojo. Antes
+  decía "1.80" de forma incorrecta — nunca se detectó porque toda máquina
+  de desarrollo usada hasta ahora tenía un `rustc` muy por encima)
 - Licencia: MIT OR Apache-2.0 (dual, estándar del ecosistema Rust)
 - `wallet` solo implementa el flujo OID4VCI `pre-authorized_code` (no
   `authorization_code`) y no monta infraestructura propia (sin ngrok, sin
