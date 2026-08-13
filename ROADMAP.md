@@ -680,15 +680,36 @@ Fases:
   Phases 2 y 3 de `portal` arriba (la de B-LT documenta además un
   hallazgo real en `ades-rs` 0.2.0, un `SEQUENCE` de más en
   `add_revocation_values`).
-- **`docker compose build tsa ocsp && docker compose up tsa ocsp` sin
-  verificar** — Docker no estaba disponible en el entorno donde se
-  implementó esto (sin integración WSL de Docker Desktop). Los
-  `Dockerfile` (multi-stage, `rust:1.80-bookworm` + `debian:bookworm-
-  slim`) y el `docker-compose.yml` (contexto de build cambiado a la raíz
-  del repo, ya que un workspace Cargo necesita todos los `crates/*` para
-  resolver) están escritos y revisados, pero no se ha comprobado que la
-  imagen compile ni que el binding `0.0.0.0` + mapeo de puertos funcione
-  de verdad en Docker. Pendiente de que el usuario lo compruebe.
+- **`docker compose build tsa ocsp && docker compose up tsa ocsp`
+  verificado** (2026-08-13, tras activarse la integración WSL de Docker
+  Desktop que faltaba antes): las dos imágenes compilan y ambos
+  contenedores responden — mismo par de pruebas con `openssl ts`/
+  `openssl ocsp` que ya se usó en local, pero contra
+  `http://127.0.0.1:2560`/`:2561` mapeados desde Docker, con idéntico
+  resultado (`Status: Granted.` / `good`). `docker compose logs` confirma
+  el bind a `0.0.0.0` dentro del contenedor, como esperaba el `CMD` de
+  cada `Dockerfile`.
+
+  **Hallazgo real, no relacionado con `tsa`/`ocsp`**: el primer intento
+  de build falló — `rust:1.80-bookworm` (la imagen que coincide con el
+  MSRV que declara `Cargo.toml`, `rust-version = "1.80"`) no puede
+  resolver el workspace en absoluto, ni siquiera para compilar solo
+  `tsa`/`ocsp` (que no dependen de `wallet` para nada): la dependencia
+  git de `wallet`, `open-auth2-rs`, declara `edition = "2024"` en su
+  propio `Cargo.toml`, lo que exige Cargo/rustc 1.85+. Con `rust:1.85-
+  bookworm` apareció un segundo escalón: `time` (dependencia transitiva)
+  exige 1.88+. Arreglado subiendo los `Dockerfile` a `rust:1.90-
+  bookworm` (con margen). **El MSRV real de este workspace es más alto
+  que el `1.80` que declara `Cargo.toml`** — nunca se había visto porque
+  toda máquina de desarrollo usada hasta ahora tiene un `rustc` muy por
+  encima (`rustc --version` en el host: 1.96.0). No se ha tocado
+  `Cargo.toml`/`CLAUDE.md` para "corregir" el MSRV declarado —
+  `CLAUDE.md` marca el MSRV como una decisión que no se cambia sin
+  consultar — solo se ha subido la imagen builder de Docker lo justo
+  para que compile. Anotado como pendiente real a decidir: o se sube el
+  MSRV declarado a lo que de verdad hace falta, o se fija
+  `open-auth2-rs`/`time` a versiones más antiguas compatibles con 1.80
+  de verdad.
 - Revocación real en `ocsp` — depende de que `ca` añada soporte de
   CRL/revocación primero (ver pendientes de `ca` arriba).
 - B-LTA (archive timestamp) — ni siquiera `ades-rs` 0.2.0 lo implementa
