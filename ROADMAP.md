@@ -842,11 +842,53 @@ Fases:
       sin comprobarlo contra una credencial real primero. Corregido y
       revalidado con una segunda ronda del mismo flujo manual (arriba,
       ya con el resultado correcto). Phase 1 cerrada.
+- [x] **Phase 2** — `response_mode=direct_post.jwt` (JARM, respuesta
+      cifrada) en vez de `direct_post` plano. Cambios: `identity.rs`
+      gana un segundo par de claves P-256 (`enc_key`, distinto del que
+      firma las peticiones — `openid4vp::core::jwe::find_encryption_jwk`
+      exige `alg=ECDH-ES`/`use=enc` en la entrada JWKS, un *uso* de clave
+      distinto al ECDSA de firma aunque compartan curva), persistido
+      igual que el par de firma (`enc_key.pem`, mismo patrón
+      generar-o-cargar). `request.rs` añade `client_metadata` con la
+      mitad pública de `enc_key` (`identity::enc_public_jwk`) y cambia
+      `ResponseMode::DirectPost` → `DirectPostJwt`; esto es exactamente
+      lo que `wallet::present.rs` ya sabía leer desde su propia Phase 3
+      (`build_encrypted_response`), así que el lado wallet no cambió.
+      **Hallazgo**: `openid4vp` solo trae el lado que *cifra* (la propia
+      `build_encrypted_response`, usada por quien responde a una
+      petición) — descifrar la respuesta que llega es responsabilidad
+      del verifier. Nuevo módulo `jwe.rs`: descifra el JWE compacto con
+      `josekit` directamente (mismo rev de git que `openid4vp` ya fija en
+      su propio `Cargo.toml`, para que cargo dedupe en vez de compilar
+      dos copias), usando el propio `SecretKey::to_jwk_string()` de
+      `p256` como JWK privado de entrada al
+      `EcdhEsJweDecrypter`/`decode_with_decrypter` de `josekit`.
+      `response.rs::verify_pid_presentation` ahora exige
+      `AuthorizationResponse::Jwt` (rechaza `Unencoded` — Phase 1 lo
+      aceptaba, Phase 2 ya no). `serve.rs` pasó de `State<Arc<Verifier>>`
+      a un `AppState{ verifier, enc_key }` porque la clave de descifrado
+      no es parte del estado que ya trae `Verifier`.
 
-### Pendiente, sin prisa (anotado, no bloquea Phase 1)
+      4 tests nuevos sin red: `identity.rs` (la clave de cifrado
+      persiste igual que la de firma; su JWK público lleva
+      `use`/`alg`/`kid` y nunca `d`), `request.rs` (`client_metadata`
+      lleva exactamente esa clave pública), `jwe.rs` (round-trip contra
+      el propio `JweBuilder` de `openid4vp` cifrando para nuestra clave
+      pública; rechaza un JWE cifrado para una clave ajena).
 
-- `response_mode=direct_post.jwt` (JARM/respuesta cifrada) — Phase 2
-  natural.
+      **Verificado manualmente** (2026-08-14, mismo PID real ya usado en
+      Phase 1): `cargo run -p verifier -- serve` → `POST /api/request`
+      (ahora con `client_metadata.jwks` y `direct_post.jwt`) →
+      `cargo run -p wallet -- present --url <request_url>` (cifra su
+      respuesta sola, sin cambios en `wallet`) → `GET /api/status/:uuid`
+      → mismo resultado exacto que Phase 1
+      (`{"given_name":"Fernando","family_name":"Luis","birthdate":
+      "1970-08-08"}`), confirmando que la respuesta viajó cifrada de
+      verdad y se descifró correctamente antes de verificarse. Phase 2
+      cerrada.
+
+### Pendiente, sin prisa (anotado, no bloquea Phase 2)
+
 - `client_id_scheme=x509_san_dns`/DID — solo `x509_hash` por ahora.
 - Validación de la cadena de confianza del emisor de la credencial
   presentada — no hay trust anchor local para `issuer.eudiw.dev`.

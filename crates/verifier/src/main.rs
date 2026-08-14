@@ -1,4 +1,5 @@
 mod identity;
+mod jwe;
 mod request;
 mod response;
 mod serve;

@@ -6068,6 +6068,7 @@ dependencies = [
  "clap",
  "der 0.7.10",
  "directories",
+ "josekit",
  "openid4vp",
  "openssl",
  "p256",

@@ -13,6 +13,13 @@ description = "OID4VP verifier (relying party), interoperating with this repo's 
 # query builder. Same crate (and same unpinned git ref, resolved via
 # Cargo.lock) `wallet` already uses from the client side.
 openid4vp = { git = "https://github.com/spruceid/openid4vp" }
+# JARM (`direct_post.jwt`) response decryption (jwe.rs): `openid4vp`
+# itself only builds the *encrypting* side (`core::jwe::build_encrypted_response`,
+# used by a wallet responding to our request) — decrypting what comes
+# back is left to the verifier. Pinned to the exact git rev `openid4vp`'s
+# own Cargo.toml pins, so Cargo resolves both to the same crate instance
+# instead of compiling two copies.
+josekit = { git = "https://github.com/cobward/josekit-rs", rev = "635c8a7" }
 # SD-JWT VC + KB-JWT verification of the incoming presentation
 # (ssi::claims::sd_jwt::SdJwt, ssi::claims::jws::decode_verify) — same
 # version openid4vp itself pins and wallet already uses for the
@@ -26,6 +33,12 @@ ssi = { version = "0.16", features = ["secp256r1"] }
 # closed and semantically scoped to AdES signing identities, not OID4VP
 # request signing; wallet's x509_hash validation doesn't check a chain
 # to a root anyway, so a self-signed leaf is sufficient).
+# "pkcs8": persisting/loading both the ECDSA signing key and the ECDH
+# encryption key (JARM decryption, see identity.rs::Identity::enc_key) as
+# PKCS8 PEM. "jwk": converting both keys' public halves to/from JWK JSON
+# (x509_hash request signing needs none of this directly, but
+# response.rs's `issuer_key_from_x5c` and identity.rs's `enc_public_jwk`
+# do).
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "jwk"] }
 x509-cert = { version = "=0.2.5", features = ["builder"] }
 der = { version = "0.7", features = ["derive", "alloc"] }

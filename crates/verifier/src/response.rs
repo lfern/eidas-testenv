@@ -137,11 +137,17 @@ fn issuer_key_from_x5c(x5c: &Option<Vec<String>>) -> Result<JWK, String> {
         })
 }
 
-/// Verifies the (single, `direct_post`, unencrypted) presentation this
-/// verifier's DCQL query asks for, returning the [`Outcome`] to store on
-/// the session. Called from `Verifier::verify_response`'s validator
-/// closure — see `serve.rs`.
-pub fn verify_response(session: &Session, response: &AuthorizationResponse) -> Outcome {
+/// Verifies the (single, `direct_post.jwt`/JARM-encrypted) presentation
+/// this verifier's DCQL query asks for, returning the [`Outcome`] to
+/// store on the session. Called from `Verifier::verify_response`'s
+/// validator closure — see `serve.rs`. `enc_key` is this verifier's own
+/// JARM decryption key (`identity.rs`), needed to open the response
+/// before its contents can be checked at all.
+pub fn verify_response(
+    session: &Session,
+    response: &AuthorizationResponse,
+    enc_key: &p256::SecretKey,
+) -> Outcome {
     let nonce = session.authorization_request_object.nonce().to_string();
     let aud = session
         .authorization_request_object
@@ -149,7 +155,7 @@ pub fn verify_response(session: &Session, response: &AuthorizationResponse) -> O
         .map(|c| c.0.clone())
         .unwrap_or_default();
 
-    match verify_unencoded_pid_presentation(response, &nonce, &aud) {
+    match verify_pid_presentation(response, enc_key, &nonce, &aud) {
         Ok(disclosed) => Outcome::Success {
             info: serde_json::json!({ "disclosed_claims": disclosed }),
         },
@@ -157,15 +163,25 @@ pub fn verify_response(session: &Session, response: &AuthorizationResponse) -> O
     }
 }
 
-fn verify_unencoded_pid_presentation(
+fn verify_pid_presentation(
     response: &AuthorizationResponse,
+    enc_key: &p256::SecretKey,
     expected_nonce: &str,
     expected_aud: &str,
 ) -> Result<DisclosedClaims, String> {
-    let AuthorizationResponse::Unencoded(unencoded) = response else {
-        return Err("expected an unencoded direct_post response (no JARM in this phase)".into());
+    // Every request this verifier sends declares an encryption key and
+    // asks for `direct_post.jwt` (see `request.rs`), so a well-behaved
+    // wallet always JARM-encrypts its response — `wallet::present.rs`
+    // does. An `Unencoded` response here means the wallet ignored that
+    // and sent `vp_token` in the clear, which this phase no longer
+    // accepts (Phase 1 did; see ROADMAP.md).
+    let AuthorizationResponse::Jwt(jwt) = response else {
+        return Err("expected a JARM-encrypted direct_post.jwt response".into());
     };
-    let presentations = presentations_for_pid_query(&unencoded.vp_token.0)?;
+    let (vp_token, _state) = crate::jwe::decrypt(&jwt.response, enc_key)
+        .map_err(|e| format!("failed to decrypt JARM response: {e:#}"))?;
+
+    let presentations = presentations_for_pid_query(&vp_token.0)?;
     let [presentation] = presentations.as_slice() else {
         return Err(format!(
             "expected exactly one '{PID_QUERY_ID}' presentation, got {}",

@@ -37,7 +37,17 @@ impl<E: Into<anyhow::Error>> From<E> for ApiError {
     }
 }
 
-/// Builds the `Verifier` used for the whole server lifetime: a self-
+/// Everything a request handler needs: the `Verifier` itself plus this
+/// verifier's own JARM decryption key, kept alongside it since it isn't
+/// part of `Verifier`'s state (`identity.rs`'s signing identity is,
+/// via `X509HashClient`; the encryption keypair is a separate, unrelated
+/// key — see `identity::Identity`'s doc comment).
+struct AppState {
+    verifier: Verifier,
+    enc_key: p256::SecretKey,
+}
+
+/// Builds the [`AppState`] used for the whole server lifetime: a self-
 /// signed `x509_hash` identity (see `identity.rs`), an in-memory session
 /// store (fine for a test/demo tool — not for production, per
 /// `openid4vp`'s own `MemoryStore` doc comment), and `external_url` as
@@ -46,7 +56,7 @@ impl<E: Into<anyhow::Error>> From<E> for ApiError {
 async fn build_verifier(
     identity_dir: &std::path::Path,
     external_url: &url::Url,
-) -> anyhow::Result<Verifier> {
+) -> anyhow::Result<AppState> {
     let identity = identity::load_or_generate(identity_dir)?;
     let signer = Arc::new(P256Signer::new(identity.key)?);
     let client = X509HashClient::new(vec![identity.cert], signer)?;
@@ -58,14 +68,19 @@ async fn build_verifier(
         .join("response")
         .context("building the submission endpoint URL")?;
 
-    Verifier::builder()
+    let verifier = Verifier::builder()
         .with_client(Arc::new(client))
         .with_session_store(Arc::new(MemoryStore::default()))
         .with_submission_endpoint(submission_endpoint)
         .by_reference(request_base)
         .build()
         .await
-        .context("building the Verifier")
+        .context("building the Verifier")?;
+
+    Ok(AppState {
+        verifier,
+        enc_key: identity.enc_key,
+    })
 }
 
 #[derive(serde::Serialize)]
@@ -75,9 +90,10 @@ struct NewRequestResponse {
 }
 
 async fn api_new_request(
-    State(verifier): State<Arc<Verifier>>,
+    State(state): State<Arc<AppState>>,
 ) -> Result<Json<NewRequestResponse>, ApiError> {
-    let (uuid, request_url) = request::build_presentation_request(&verifier).await?;
+    let (uuid, request_url) =
+        request::build_presentation_request(&state.verifier, &state.enc_key).await?;
     Ok(Json(NewRequestResponse {
         uuid,
         request_url: request_url.to_string(),
@@ -87,10 +103,10 @@ async fn api_new_request(
 /// Serves the signed request JWT for a by-reference presentation
 /// request — what a wallet's `request_uri` GET fetches.
 async fn get_request(
-    State(verifier): State<Arc<Verifier>>,
+    State(state): State<Arc<AppState>>,
     Path(uuid): Path<Uuid>,
 ) -> Result<Response, ApiError> {
-    let jwt = verifier.retrieve_authorization_request(uuid).await?;
+    let jwt = state.verifier.retrieve_authorization_request(uuid).await?;
     Ok((
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/oauth-authz-req+jwt")],
@@ -109,25 +125,27 @@ async fn get_request(
 /// status is simpler than threading the rejection reason back out of
 /// `verify_response`'s validator closure.)
 async fn post_response(
-    State(verifier): State<Arc<Verifier>>,
+    State(state): State<Arc<AppState>>,
     Path(uuid): Path<Uuid>,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let authorization_response = AuthorizationResponse::from_x_www_form_urlencoded(&body)
         .context("parsing the authorization response")?;
-    verifier
-        .verify_response(uuid, authorization_response, |session, resp| {
-            Box::pin(async move { response::verify_response(&session, &resp) })
+    let enc_key = state.enc_key.clone();
+    state
+        .verifier
+        .verify_response(uuid, authorization_response, move |session, resp| {
+            Box::pin(async move { response::verify_response(&session, &resp, &enc_key) })
         })
         .await?;
     Ok(Json(serde_json::json!({})))
 }
 
 async fn api_status(
-    State(verifier): State<Arc<Verifier>>,
+    State(state): State<Arc<AppState>>,
     Path(uuid): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let status = verifier.poll_status(uuid).await?;
+    let status = state.verifier.poll_status(uuid).await?;
     Ok(Json(serde_json::to_value(status)?))
 }
 
@@ -142,13 +160,13 @@ pub async fn run(
     identity_dir: std::path::PathBuf,
     external_url: url::Url,
 ) -> anyhow::Result<()> {
-    let verifier = build_verifier(&identity_dir, &external_url).await?;
+    let state = build_verifier(&identity_dir, &external_url).await?;
     let app = Router::new()
         .route("/api/request", post(api_new_request))
         .route("/request/{uuid}", get(get_request))
         .route("/response/{uuid}", post(post_response))
         .route("/api/status/{uuid}", get(api_status))
-        .with_state(Arc::new(verifier));
+        .with_state(Arc::new(state));
 
     let addr = std::net::SocketAddr::from((host, port));
     let listener = tokio::net::TcpListener::bind(addr)

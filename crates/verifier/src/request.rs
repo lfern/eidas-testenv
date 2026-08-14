@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use openid4vp::core::authorization_request::parameters::{
-    ClientIdScheme, Nonce, ResponseMode, ResponseType,
+    ClientIdScheme, ClientMetadata, Nonce, ResponseMode, ResponseType,
 };
 use openid4vp::core::credential_format::{
     ClaimFormatDesignation, ClaimFormatMap, ClaimFormatPayload,
@@ -12,7 +12,9 @@ use openid4vp::core::credential_format::{
 use openid4vp::core::dcql_query::{
     DcqlCredentialClaimsQuery, DcqlCredentialClaimsQueryPath, DcqlCredentialQuery, DcqlQuery,
 };
+use openid4vp::core::metadata::parameters::verifier::JWKs;
 use openid4vp::core::metadata::{parameters::wallet::VpFormatsSupported, WalletMetadata};
+use openid4vp::core::object::UntypedObject;
 use openid4vp::utils::NonEmptyVec;
 use openid4vp::verifier::Verifier;
 use url::Url;
@@ -92,9 +94,30 @@ fn claim_query(name: &str) -> DcqlCredentialClaimsQuery {
     )))
 }
 
+/// Builds the `client_metadata` this verifier attaches to its own
+/// request: just the `jwks` entry carrying its JARM encryption public key
+/// (`identity::enc_public_jwk`). This is what a wallet's
+/// `build_encrypted_response` (`openid4vp::core::jwe`) reads to pick the
+/// key it encrypts the `direct_post.jwt` response with — see
+/// `wallet::present.rs`, which already handles that response mode.
+fn client_metadata(enc_key: &p256::SecretKey) -> Result<ClientMetadata> {
+    let jwk = crate::identity::enc_public_jwk(enc_key)
+        .context("building this verifier's encryption public key")?;
+    let mut metadata = ClientMetadata(UntypedObject::default());
+    metadata.0.insert(JWKs { keys: vec![jwk] });
+    Ok(metadata)
+}
+
 /// Starts a new presentation session and returns the `(session id,
-/// request URL)` a wallet should be pointed at.
-pub async fn build_presentation_request(verifier: &Verifier) -> Result<(Uuid, Url)> {
+/// request URL)` a wallet should be pointed at. `enc_key` is this
+/// verifier's JARM encryption key (see `identity.rs`) — its public half
+/// goes into the request's `client_metadata` so the wallet can encrypt
+/// its `direct_post.jwt` response against it; `response.rs::verify_response`
+/// decrypts with the matching private half.
+pub async fn build_presentation_request(
+    verifier: &Verifier,
+    enc_key: &p256::SecretKey,
+) -> Result<(Uuid, Url)> {
     let dcql_query = pid_dcql_query().context("building the DCQL query")?;
     // A fresh nonce per request: what binds the wallet's KB-JWT to this
     // specific transaction (checked in `response.rs::verify_presentation`
@@ -105,8 +128,12 @@ pub async fn build_presentation_request(verifier: &Verifier) -> Result<(Uuid, Ur
         .build_authorization_request()
         .with_dcql_query(dcql_query)
         .with_request_parameter(ResponseType::VpToken)
-        .with_request_parameter(ResponseMode::DirectPost)
+        // JARM: the wallet encrypts its response with the key this
+        // request's client_metadata declares (see `client_metadata`
+        // above), instead of sending vp_token in the clear.
+        .with_request_parameter(ResponseMode::DirectPostJwt)
         .with_request_parameter(nonce)
+        .with_request_parameter(client_metadata(enc_key)?)
         .build(target_wallet_metadata().context("building target wallet metadata")?)
         .await
         .context("building the authorization request")
@@ -145,8 +172,11 @@ mod tests {
     #[tokio::test]
     async fn builds_a_by_reference_request_url_for_the_stored_session() {
         let verifier = throwaway_verifier().await;
+        let enc_key = p256::SecretKey::random(&mut OsRng);
 
-        let (uuid, url) = build_presentation_request(&verifier).await.unwrap();
+        let (uuid, url) = build_presentation_request(&verifier, &enc_key)
+            .await
+            .unwrap();
 
         // Passed by reference (see `serve::build_verifier`'s `.by_reference`),
         // so the URL only carries a `request_uri` pointer, not the JWT itself.
@@ -190,5 +220,18 @@ mod tests {
                 )]
             );
         }
+    }
+
+    #[test]
+    fn client_metadata_carries_the_encryption_public_key_only() {
+        let enc_key = p256::SecretKey::random(&mut OsRng);
+
+        let metadata = client_metadata(&enc_key).unwrap();
+
+        let JWKs { keys } = metadata.jwks().expect("jwks should be present").unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].get("use").unwrap(), "enc");
+        assert_eq!(keys[0].get("alg").unwrap(), "ECDH-ES");
+        assert!(keys[0].get("d").is_none(), "must not leak the private key");
     }
 }

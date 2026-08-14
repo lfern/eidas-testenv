@@ -27,10 +27,17 @@ use x509_cert::time::Validity;
 use x509_cert::Certificate;
 
 /// This verifier's signing identity: a self-signed P-256 certificate and
-/// the key that signs with it.
+/// the key that signs with it. Also carries a second, unrelated P-256
+/// keypair (`enc_key`) used only for JARM (`response_mode=direct_post.jwt`)
+/// response encryption — a distinct key by design, since `openid4vp`'s own
+/// `find_encryption_jwk` (`core::jwe.rs`) requires the JWKS entry to carry
+/// `alg=ECDH-ES`/`use=enc`, which is a different key *usage* than the
+/// `key`/`cert` pair's ECDSA request-signing role, even though both
+/// happen to sit on the same curve.
 pub struct Identity {
     pub cert: Certificate,
     pub key: SigningKey,
+    pub enc_key: p256::SecretKey,
 }
 
 /// Random 20-byte serial number, same RFC 5280-style convention
@@ -70,25 +77,31 @@ pub(crate) fn self_signed_cert(key: &SigningKey, common_name: &str) -> Result<Ce
 fn generate() -> Result<Identity> {
     let key = SigningKey::random(&mut OsRng);
     let cert = self_signed_cert(&key, "eidas-testenv Test Verifier")?;
-    Ok(Identity { cert, key })
+    let enc_key = p256::SecretKey::random(&mut OsRng);
+    Ok(Identity { cert, key, enc_key })
 }
 
-/// Loads the verifier's identity from `<dir>/{cert.pem,key.pem}`,
+/// Loads the verifier's identity from `<dir>/{cert.pem,key.pem,enc_key.pem}`,
 /// generating and persisting a new one if it doesn't exist yet.
 pub fn load_or_generate(dir: &Path) -> Result<Identity> {
     let cert_path = dir.join("cert.pem");
     let key_path = dir.join("key.pem");
+    let enc_key_path = dir.join("enc_key.pem");
 
-    if cert_path.exists() && key_path.exists() {
+    if cert_path.exists() && key_path.exists() && enc_key_path.exists() {
         let cert_pem = std::fs::read_to_string(&cert_path)
             .with_context(|| format!("reading {}", cert_path.display()))?;
         let key_pem = std::fs::read_to_string(&key_path)
             .with_context(|| format!("reading {}", key_path.display()))?;
+        let enc_key_pem = std::fs::read_to_string(&enc_key_path)
+            .with_context(|| format!("reading {}", enc_key_path.display()))?;
         let cert = Certificate::from_pem(cert_pem.as_bytes())
             .with_context(|| format!("parsing {}", cert_path.display()))?;
         let key = SigningKey::from_pkcs8_pem(&key_pem)
             .with_context(|| format!("parsing {}", key_path.display()))?;
-        return Ok(Identity { cert, key });
+        let enc_key = p256::SecretKey::from_pkcs8_pem(&enc_key_pem)
+            .with_context(|| format!("parsing {}", enc_key_path.display()))?;
+        return Ok(Identity { cert, key, enc_key });
     }
 
     let identity = generate()?;
@@ -110,7 +123,36 @@ pub fn load_or_generate(dir: &Path) -> Result<Identity> {
             .context("encoding verifier key as PEM")?,
     )
     .with_context(|| format!("writing {}", key_path.display()))?;
+    std::fs::write(
+        &enc_key_path,
+        identity
+            .enc_key
+            .to_pkcs8_pem(LineEnding::LF)
+            .context("encoding verifier encryption key as PEM")?,
+    )
+    .with_context(|| format!("writing {}", enc_key_path.display()))?;
     Ok(identity)
+}
+
+/// This verifier's JARM encryption key, as a public JWK with the
+/// `use`/`alg` parameters `openid4vp::core::jwe::find_encryption_jwk`
+/// requires (`use=enc`, `alg=ECDH-ES`) — neither is part of the bare JWK
+/// `p256::PublicKey::to_jwk_string()` produces, so they're added here.
+/// Meant to go straight into the `jwks` entry of the `client_metadata`
+/// this verifier's presentation requests carry (see `request.rs`).
+pub fn enc_public_jwk(
+    enc_key: &p256::SecretKey,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let jwk_str = enc_key.public_key().to_jwk_string();
+    let mut jwk: serde_json::Value =
+        serde_json::from_str(&jwk_str).context("serializing verifier encryption public key")?;
+    let map = jwk
+        .as_object_mut()
+        .context("expected the encryption public key's JWK to be a JSON object")?;
+    map.insert("use".to_owned(), serde_json::json!("enc"));
+    map.insert("alg".to_owned(), serde_json::json!("ECDH-ES"));
+    map.insert("kid".to_owned(), serde_json::json!("verifier-enc-1"));
+    Ok(map.clone())
 }
 
 /// Resolves `~/.eidas-testenv/verifier/`, same base directory convention
@@ -146,6 +188,7 @@ mod tests {
         let identity = load_or_generate(&dir).unwrap();
         assert!(dir.join("cert.pem").is_file());
         assert!(dir.join("key.pem").is_file());
+        assert!(dir.join("enc_key.pem").is_file());
         // Self-signed: the cert's own key must verify its own signature,
         // i.e. it was signed by `identity.key`, not some other key.
         assert_eq!(
@@ -175,6 +218,26 @@ mod tests {
 
         assert_eq!(first.key.to_bytes(), second.key.to_bytes());
         assert_eq!(first.cert.to_der().unwrap(), second.cert.to_der().unwrap());
+        assert_eq!(
+            first.enc_key.to_bytes(),
+            second.enc_key.to_bytes(),
+            "encryption key should also be reused, not regenerated"
+        );
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn enc_public_jwk_carries_the_parameters_josekit_requires() {
+        let dir = temp_dir("enc-jwk");
+        let identity = load_or_generate(&dir).unwrap();
+        let jwk = enc_public_jwk(&identity.enc_key).unwrap();
+
+        assert_eq!(jwk.get("kty").unwrap(), "EC");
+        assert_eq!(jwk.get("crv").unwrap(), "P-256");
+        assert_eq!(jwk.get("use").unwrap(), "enc");
+        assert_eq!(jwk.get("alg").unwrap(), "ECDH-ES");
+        assert!(jwk.get("d").is_none(), "must be the public key only");
 
         std::fs::remove_dir_all(&dir).unwrap();
     }
